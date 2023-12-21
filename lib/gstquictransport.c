@@ -58,7 +58,6 @@
 
 #include <gio/gsocketaddress.h>
 #include <gst/net/gstnetaddressmeta.h>
-#include <gst/net/gstnetecnmeta.h>
 #include <glib/gtypes.h>
 #include <glib/gstdio.h>
 #include <fcntl.h>
