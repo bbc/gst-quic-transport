@@ -33,23 +33,23 @@ transport.
 The plugins acheive this by utilising the same common "quiclib" library. The
 `GstQuicLibCommon` class is a singleton instance which checks whether an
 existing connection created by another instance of a QUIC element matches. If
-no match is found, then it will create a new `GstQuicLibServerContext` or
-`GstQuicLibTransportConnection`. If there is a match, then it will increment
-the refcount on the object and return that instance.
+no match is found, then it creates a new `GstQuicLibServerContext` or
+`GstQuicLibTransportConnection`. If there is a match, then it increments
+the refcount on the object and returns that instance.
 
 ### Streams
 
 For each bidirectional or unidirectional QUIC stream, the "quicdemux" element
-will create a new src pad. The element will remember peers that have previously
-linked against those pads and will send an element query to them with
-information about those new streams, in order of first to last seen peer
-element, and allow downstream elements to declare interest in a given QUIC
+creates a new src pad. The element remembers peers that have previously
+linked against those pads and sends an element query to them with
+information about those new stream (in order of first to last seen peer
+element) and allows downstream elements to declare an interest in a given QUIC
 stream.
 
 Similarly, to open a new bidirectional or unidirectional QUIC stream, an
 upstream element simply needs to request a new sink pad from the "quicmux"
-element, which will query it's "quicsink" peer and if there is an appropriate
-QUIC connection established will open a new stream.
+element. This element then queries its "quicsink" peer and, if there is an
+appropriate QUIC connection established, opens a new QUIC stream.
 
 If the QUIC transport connection negotiates it, then there are additional
 datagram pads available on both the "quicdemux" and "quicmux" elements for
@@ -64,5 +64,3 @@ This project depends on:
 - GLib w/Gio
 - ngtcp2
 - QuicTLS (OpenSSL)
-
-
