@@ -114,7 +114,6 @@ static void gst_quicsrc_get_property (GObject * object,
  */
 static GstStateChangeReturn gst_quicsrc_change_state (GstElement *elem,
 													  GstStateChange t);
-static gboolean gst_quicsrc_send_event (GstElement *elem, GstEvent *event);
 /*
  * GstBaseSrc virtual methods
  */
@@ -519,14 +518,6 @@ gst_quicsrc_change_state (GstElement *elem, GstStateChange t)
   }
 
   return rv;
-}
-
-static gboolean gst_quicsrc_send_event (GstElement *elem, GstEvent *event)
-{
-  /* TODO */
-  g_assert (0);
-
-  return FALSE;
 }
 
 /*

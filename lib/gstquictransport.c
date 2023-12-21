@@ -971,7 +971,6 @@ gst_quiclib_transport_connection_class_init (
 static void gst_quiclib_transport_connection_set_property (GObject * object,
     guint prop_id, const GValue * value, GParamSpec * pspec)
 {
-  ngtcp2_transport_params *remote_tp = NULL;
   GstQuicLibTransportConnection *conn =
       GST_QUICLIB_TRANSPORT_CONNECTION (object);
 
@@ -1080,7 +1079,7 @@ void
 gst_quiclib_transport_connection_get_local_transport_param (
     GstQuicLibTransportContext * ctx, guint prop_id, GValue * value) {
   GstQuicLibTransportConnection *conn;
-  ngtcp2_transport_params *local_tp;
+  const ngtcp2_transport_params *local_tp;
 
   if (!GST_IS_QUICLIB_TRANSPORT_CONNECTION (ctx)) {
     g_value_set_uint64 (value, 0);
@@ -1657,14 +1656,6 @@ quiclib_ngtcp2_print (void *user_data, const char *format, ...)
 }
 
 int
-quiclib_ngtcp2_recv_client_initial (ngtcp2_conn *quic_conn,
-    const ngtcp2_cid *dcid, void *user_data)
-{
-  GstQuicLibTransportConnection *conn =
-      (GstQuicLibTransportConnection *) user_data;
-}
-
-int
 quiclib_ngtcp2_handshake_completed (ngtcp2_conn *quic_conn, void *user_data)
 {
   GstQuicLibTransportConnection *conn =
@@ -1672,7 +1663,7 @@ quiclib_ngtcp2_handshake_completed (ngtcp2_conn *quic_conn, void *user_data)
   GstQuicLibTransportUserInterface *iface =
       QUICLIB_TRANSPORT_USER_GET_IFACE (
           gst_quiclib_transport_context_get_user (conn));
-  ngtcp2_transport_params *remote_params;
+  const ngtcp2_transport_params *remote_params;
 
   gst_quiclib_transport_context_set_state (GST_QUICLIB_TRANSPORT_CONTEXT (conn),
       QUIC_STATE_HANDSHAKE);
@@ -1766,12 +1757,6 @@ quiclib_ngtcp2_recv_stream_data (ngtcp2_conn *quic_conn, uint32_t flags,
 
   iface->stream_data (gst_quiclib_transport_context_get_user (conn),
       GST_QUICLIB_TRANSPORT_CONTEXT (conn), buffer);
-
-  if (iface->stream_data_left) {
-    guint64 credit;
-
-    credit = ngtcp2_conn_get_max_stream_data_left (conn->quic_conn, stream_id);
-  }
 
   return 0;
 }
@@ -2396,7 +2381,6 @@ quiclib_ngtcp2_conn_write (GstQuicLibTransportConnection *conn,
     int final, GstBuffer *orig_ref)
 {
   ngtcp2_path_storage ps, prev_ps;
-  uint32_t prev_ecn = 0;
   uint32_t flags = 0; /* NGTCP2_WRITE_STREAM_FLAG_MORE */
   ngtcp2_pkt_info pi;
   size_t max_udp_size;

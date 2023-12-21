@@ -559,7 +559,6 @@ GSList *
 quiclib_alpns_to_list (gchar *alpns)
 {
   GSList *list = NULL;
-  gchar *orig = (gchar *) alpns, *saveptr = NULL;
 
   gchar *start = (gchar *) alpns, *end = NULL;
 
@@ -751,7 +750,7 @@ gst_quiclib_unref (GstQuicLibTransportContext *ctx,
 {
   GstQuicLibCommon *libctx = (GstQuicLibCommon *)
       g_object_new (GST_TYPE_QUICLIB_COMMON, NULL);
-  GList *users, users_it;
+  GList *users;
 
   GST_DEBUG_OBJECT (libctx, "Locking mutex!");
   g_mutex_lock (&libctx->mutex);

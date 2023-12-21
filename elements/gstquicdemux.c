@@ -741,7 +741,6 @@ gst_quic_demux_query (GstPad *pad, GstObject *parent, GstQuery *query)
         }
       } else if (gst_query_is_associated_pad (query)) {
         guint64 sid;
-        GList *it;
 
         sid = gst_query_get_associated_pad_stream_id (query);
 
