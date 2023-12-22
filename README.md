@@ -23,8 +23,8 @@ of dynamically allocated src and sink pads.
 The elements in this repository are not that useful on their own, as they are
 designed to be augmented by application-specific muxers and demuxers of their
 own. Examples of these can be found in the accompanying 
-[gst-roq repository](https://github.com/bbc/gst-roq) shown in the above
-diagram. These elements implement the IETF RTP-over-QUIC draft.
+[gst-roq repository](https://github.com/bbc/gst-roq) which implement the IETF
+RTP-over-QUIC draft.
 
 ### Common QUIC transport
 
