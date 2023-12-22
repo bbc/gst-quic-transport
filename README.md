@@ -11,7 +11,7 @@ such as [RTP-over-QUIC](https://datatracker.ietf.org/doc/draft-ietf-avtcore-rtp-
 
 ## Architecture
 
-![A diagram showing the plugin architecture](/docs/GstSipQuic-quic-transport-roq-architecture.png)
+![A diagram showing the plugin architecture](/docs/GstSipQuic-quic-transport-no-roq-architecture.png)
 
 This repository contains the "core" plugins to enable QUIC transport within a
 GStreamer pipeline. These include a "quicsrc" and "quicsink" element for
