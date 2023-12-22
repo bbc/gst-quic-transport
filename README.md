@@ -11,9 +11,7 @@ such as [RTP-over-QUIC](https://datatracker.ietf.org/doc/draft-ietf-avtcore-rtp-
 
 ## Architecture
 
-```
-Insert diagram here
-```
+![A diagram showing the plugin architecture](/docs/GstSipQuic-quic-transport-roq-architecture.png)
 
 This repository contains the "core" plugins to enable QUIC transport within a
 GStreamer pipeline. These include a "quicsrc" and "quicsink" element for
@@ -21,6 +19,12 @@ carrying QUIC transport data into and out of a GStreamer pipeline, which are
 intended to be paired with the included "quicdemux" and "quicmux" elements
 respectively which expose the QUIC stream and QUIC datagram flows on a series
 of dynamically allocated src and sink pads.
+
+The elements in this repository are not that useful on their own, as they are
+designed to be augmented by application-specific muxers and demuxers of their
+own. Examples of these can be found in the accompanying 
+[gst-roq repository](https://github.com/bbc/gst-roq) shown in the above
+diagram. These elements implement the IETF RTP-over-QUIC draft.
 
 ### Common QUIC transport
 
@@ -64,3 +68,66 @@ This project depends on:
 - GLib w/Gio
 - ngtcp2
 - QuicTLS (OpenSSL)
+
+This project has only been tested on Linux x86\_64 so far (Ubuntu 22.04 and
+Fedora 39).
+
+### Building the dependencies
+
+The following guides will install the QuicTLS and ngtcp2 dependencies somewhere
+other than /usr. This is probably helpful, as it's unlikely you'll find QuicTLS
+or ngtcp2 in your distribution's package manager, and QuicTLS will likely clash
+with your distribution's provided version of OpenSSL.
+
+For this to work, you should set:
+* `$SOME_LOCAL_PREFIX` to your desired install location
+* Add `$SOME_LOCAL_PREFIX/bin` to your `$PATH`
+* Add`$SOME_LOCAL_PREFIX/lib`, `$SOME_LOCAL_PREFIX/lib64`,
+`$SOME_LOCAL_PREFIX/lib/x86_64-linux-gnu` and
+`$SOME_LOCAL_PREFIX/lib/x86_64-linux-gnu/gstreamer-1.0` to your
+`$LD_LIBRARY_PATH`
+* Add `$SOME_LOCAL_PREFIX/lib/x86_64-linux-gnu/pkgconfig`,
+`$SOME_LOCAL_PREFIX/lib64/pkgconfig` and `$SOME_LOCAL_PREFIX/lib/pkgconfig` to
+your `$PKG_CONFIG_PATH`.
+
+The ngtcp2 project can use multiple SSL backend libraries. It may be possible
+to use ngtcp2 with a different SSL back-end than QuicTLS, but this has not been
+tested. This project will still require some flavour of OpenSSL to perform
+various functions, be it regular OpenSSL, BoringSSL or QuicTLS.
+
+#### QuicTLS
+
+```
+$ git clone https://github.com/quictls/openssl
+$ cd openssl
+$ ./config --prefix=$SOME_LOCAL_PREFIX
+$ make
+$ make test
+$ make install
+```
+
+#### ngtcp2
+
+```
+$ git clone https://github.com/ngtcp2/ngtcp2
+$ cd ngtcp2
+$ autoreconf -i
+$ ./configure --prefix=$SOME_LOCAL_PREFIX
+$ make
+$ make install
+```
+
+### Building gst-quic-transport
+
+This repository uses the [Meson Build system](https://mesonbuild.com/). As a
+quic start guide, the elements and libraries contained in this repository can
+be installed using the following commands:
+
+```
+meson setup --prefix $SOME_LOCAL_PREFIX build
+meson compile -C build
+meson install -C build
+```
+
+The above commands will create a `build` directory in your source tree, which
+is where the compiled objects will be stored before install.
