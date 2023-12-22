@@ -1,6 +1,7 @@
 /*
- * GStreamer
- * Copyright (C) 2023 Samuel Hurst <sam.hurst@bbc.co.uk>
+ * Copyright 2023 British Broadcasting Corporation - Research and Development
+ *
+ * Author: Sam Hurst <sam.hurst@bbc.co.uk>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the "Software"),
