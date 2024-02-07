@@ -55,12 +55,14 @@
 
 G_BEGIN_DECLS
 
-#define GST_TYPE_QUICMUX (gst_quic_mux_get_type())
-G_DECLARE_FINAL_TYPE (GstQuicMux, gst_quic_mux,
-    GST, QUICMUX, GstElement)
+#define GST_TYPE_QUICMUX_STREAM_OBJECT (gst_quic_mux_stream_object_get_type())
+G_DECLARE_FINAL_TYPE (GstQuicMuxStreamObject, gst_quic_mux_stream_object,
+    GST, QUICMUX_STREAM_OBJECT, GstObject)
 
 struct _GstQuicMuxStreamObject
 {
+  GstObject parent;
+
   GstPad *sinkpad;
   guint64 stream_id;
   guint64 offset;
@@ -69,17 +71,26 @@ struct _GstQuicMuxStreamObject
   GCond wait;
 };
 
-typedef struct _GstQuicMuxStreamObject GstQuicMuxStreamObject;
+#define GST_TYPE_QUICMUX (gst_quic_mux_get_type())
+G_DECLARE_FINAL_TYPE (GstQuicMux, gst_quic_mux,
+    GST, QUICMUX, GstElement)
 
 struct _GstQuicMux
 {
   GstElement element;
 
+  GMutex mutex;
+
   GstPad *srcpad;
-  guint bidi_stream_pad_id_next;
-  GList *bidi_stream_pads;
-  guint uni_stream_pad_id_next;
-  GList *uni_stream_pads;
+  /*
+   * GHashTable <GstPad, GstQuicMuxStreamObject>
+   */
+  GHashTable *pad_to_stream;
+  /*
+   * GHashTable <guint64 *, GstQuicMuxStreamObject>
+   */
+  GHashTable *id_to_stream;
+
   /*
    * Multiple datagram pads, as we could have multiple things trying to send
    * datagrams, but users of this functionality must be aware that there is no

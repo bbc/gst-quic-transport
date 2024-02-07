@@ -90,6 +90,49 @@
 GST_DEBUG_CATEGORY_STATIC (gst_quic_mux_debug);
 #define GST_CAT_DEFAULT gst_quic_mux_debug
 
+G_DEFINE_TYPE (GstQuicMuxStreamObject, gst_quic_mux_stream_object,
+    GST_TYPE_OBJECT);
+
+static void
+gst_quic_mux_stream_object_class_init (GstQuicMuxStreamObjectClass *klass)
+{
+}
+
+static void
+gst_quic_mux_stream_object_init (GstQuicMuxStreamObject *stream)
+{
+  stream->sinkpad = NULL;
+  stream->stream_id = -1;
+  stream->offset = 0;
+
+  g_mutex_init (&stream->mutex);
+  g_cond_init (&stream->wait);
+}
+
+GstQuicMuxStreamObject *
+quic_mux_new_stream_object (GstQuicMux *quicmux, guint64 stream_id, GstPad *pad)
+{
+  GstQuicMuxStreamObject *stream =
+      g_object_new (GST_TYPE_QUICMUX_STREAM_OBJECT, NULL);
+  if (stream == NULL) return NULL;
+
+  stream->stream_id = stream_id;
+  stream->sinkpad = pad;
+  g_mutex_lock (&quicmux->mutex);
+  g_hash_table_insert (quicmux->pad_to_stream, pad, stream);
+  g_object_ref (stream);
+  g_hash_table_insert (quicmux->id_to_stream, &stream->stream_id, stream);
+  g_mutex_unlock (&quicmux->mutex);
+
+  GST_TRACE_OBJECT (quicmux, "Added new stream object with stream ID %lu and "
+      "pad %p - pad_to_stream count %u, id_to_stream count %u",
+      stream->stream_id, stream->sinkpad,
+      g_hash_table_size (quicmux->pad_to_stream),
+      g_hash_table_size (quicmux->id_to_stream));
+
+  return stream;
+}
+
 enum
 {
   PROP_0,
@@ -206,6 +249,13 @@ gst_quic_mux_init (GstQuicMux * quicmux)
       GST_DEBUG_FUNCPTR (gst_quic_mux_src_pad_linked));
   gst_pad_set_query_function (quicmux->srcpad,
       GST_DEBUG_FUNCPTR (gst_quic_mux_src_query));
+
+  quicmux->pad_to_stream = g_hash_table_new_full (g_direct_hash, g_direct_equal,
+      NULL, gst_object_unref);
+  quicmux->id_to_stream = g_hash_table_new_full (g_int64_hash, g_int64_equal,
+      NULL, gst_object_unref);
+
+  g_mutex_init (&quicmux->mutex);
 }
 
 static void
@@ -273,17 +323,13 @@ quic_mux_get_stream_from_pad (GstQuicMux *quicmux, GstPad *pad)
 {
   GstQuicMuxStreamObject *rv = NULL;
 
-  if (quic_mux_search_stream_objects (quicmux->bidi_stream_pads, pad, &rv)) {
-    return rv;
-  } else if (quic_mux_search_stream_objects (quicmux->uni_stream_pads, pad,
-      &rv)) {
-    return rv;
-  } else if (quic_mux_search_stream_objects (quicmux->datagram_stream_pads,
-      pad, &rv)) {
-    return rv;
-  }
+  g_mutex_lock (&quicmux->mutex);
 
-  return NULL;
+  rv = g_hash_table_lookup (quicmux->pad_to_stream, (gconstpointer) pad);
+
+  g_mutex_unlock (&quicmux->mutex);
+
+  return rv;
 }
 
 /**
@@ -297,27 +343,34 @@ quic_mux_get_stream_from_pad (GstQuicMux *quicmux, GstPad *pad)
  * @return TRUE if the pad was found in @p list, otherwise FALSE.
  */
 gboolean
-quic_mux_close_stream_from_pad (GstQuicMux *quicmux, GList **list, GstPad *pad,
+quic_mux_close_stream_from_pad (GstQuicMux *quicmux, GstPad *pad,
     guint64 reason)
 {
-  GList *it = *list;
-  while (it != NULL) {
-    if (((GstQuicMuxStreamObject *) it->data)->sinkpad == pad) {
-      gboolean rv;
-      if (*list != quicmux->datagram_stream_pads) {
-        GstQuery *closeq = gst_query_cancel_quiclib_stream (
-            ((GstQuicMuxStreamObject *) it->data)->stream_id, reason);
-        rv = gst_pad_peer_query (quicmux->srcpad, closeq);
-        if (!rv) {
-          GST_ERROR_OBJECT (quicmux, "Close stream query failed");
-        }
-        gst_query_unref (closeq);
-      }
-      g_free (it->data);
-      *list = g_list_delete_link (*list, it);
-      return TRUE;
-    }
+  GstQuicMuxStreamObject *stream;
+  guint64 stream_id = G_MAXUINT64;
+
+  g_mutex_lock (&quicmux->mutex);
+
+  if (g_hash_table_lookup_extended (quicmux->pad_to_stream, pad, NULL,
+      (gpointer *) &stream))
+  {
+    stream_id = stream->stream_id;
+    g_hash_table_remove (quicmux->pad_to_stream, pad);
+    g_hash_table_remove (quicmux->id_to_stream, &stream_id);
   }
+
+  g_mutex_unlock (&quicmux->mutex);
+
+  if (stream_id < QUICLIB_VARINT_MAX) {
+    GstQuery *closeq = gst_query_cancel_quiclib_stream (stream_id, reason);
+    if (!gst_pad_peer_query (quicmux->srcpad, closeq)) {
+      GST_ERROR_OBJECT (quicmux, "Close stream query failed!");
+    }
+    gst_query_unref (closeq);
+
+    return TRUE;
+  }
+
   return FALSE;
 }
 
@@ -336,16 +389,8 @@ quic_mux_pad_unlinked (GstPad * self, GstPad * peer, gpointer user_data)
 
   GST_DEBUG_OBJECT (quicmux, "Pad %p unlinked from peer %p", self, peer);
 
-  if (quic_mux_close_stream_from_pad (
-      quicmux, &quicmux->bidi_stream_pads, self, 0)) goto done;
-  if (quic_mux_close_stream_from_pad (quicmux, &quicmux->uni_stream_pads, self,
-      0))
-    goto done;
-  quic_mux_close_stream_from_pad (quicmux, &quicmux->datagram_stream_pads,
-      self, 0);
+  quic_mux_close_stream_from_pad (quicmux, self, 0);
 
-done:
-  GST_DEBUG_OBJECT (quicmux, "Closed stream");
   gst_element_remove_pad (GST_ELEMENT (quicmux), self);
 }
 
@@ -359,13 +404,16 @@ static GstPad *
 gst_quic_mux_request_new_pad (GstElement *element, GstPadTemplate *templ,
     const gchar *n, const GstCaps *caps)
 {
-  GstQuicMuxStreamObject *stream;
-  GList **pad_list = NULL;
-  gint64 pad_id = -1;
+  enum {
+    PAD_NONE,
+    PAD_BIDI,
+    PAD_UNI,
+    PAD_DATAGRAM
+  } pad_type = PAD_NONE;
   GstQuicMux *quicmux = GST_QUICMUX (element);
-  gchar *name;
   GstCaps *templ_caps = gst_pad_template_get_caps (templ);
   GstQuery *new_stream_query = NULL;
+  GstPad *pad;
   guint64 stream_id = G_MAXUINT64;
 
   const gchar *media_type =
@@ -373,6 +421,8 @@ gst_quic_mux_request_new_pad (GstElement *element, GstPadTemplate *templ,
 
   GST_DEBUG_OBJECT (quicmux, "New pad %s requested (%s) with caps %" GST_PTR_FORMAT,
       media_type, n, caps);
+
+  g_mutex_lock (&quicmux->mutex);
 
   /* application/quic+[s|d]... */
   switch (media_type[17]) {
@@ -389,22 +439,16 @@ gst_quic_mux_request_new_pad (GstElement *element, GstPadTemplate *templ,
         if (gst_structure_get_uint64 (caps_structure, QUICLIB_STREAMID_KEY,
             &stream_id) == TRUE) {
           GstQuery *q;
-          GList *it;
 
           GST_DEBUG_OBJECT (quicmux,
               "Request for stream with specific stream ID %lu", stream_id);
 
-          it = g_list_first (quicmux->bidi_stream_pads);
-
-          while (it != NULL) {
-            GstQuicMuxStreamObject *obj = (GstQuicMuxStreamObject *) it->data;
-            if (obj->stream_id == stream_id) {
-              GST_WARNING_OBJECT (quicmux, "Already have a pad for stream %lu",
-                  stream_id);
-              return NULL;
-            }
-
-            it = g_list_next (it);
+          if (g_hash_table_lookup_extended (quicmux->id_to_stream, &stream_id,
+              NULL, NULL)) {
+            GST_WARNING_OBJECT (quicmux, "Already have a pad for stream %lu",
+                stream_id);
+            g_mutex_unlock (&quicmux->mutex);
+            return NULL;
           }
 
           q = gst_query_quiclib_stream_state (stream_id);
@@ -418,16 +462,16 @@ gst_quic_mux_request_new_pad (GstElement *element, GstPadTemplate *templ,
                 (state & QUIC_STREAM_CLOSED_SENDING)) {
               GST_WARNING_OBJECT (quicmux,
                   "Stream %lu is not open for sending!", stream_id);
+              g_mutex_unlock (&quicmux->mutex);
               return NULL;
             }
           }
         }
       }
 
-      pad_list = &quicmux->bidi_stream_pads;
-      pad_id = quicmux->bidi_stream_pad_id_next++;
+      pad_type = PAD_BIDI;
 
-      if (stream_id == -1) {
+      if (stream_id == G_MAXUINT64) {
         new_stream_query = gst_query_new_quiclib_stream (QUIC_STREAM_BIDI);
       }
       break;
@@ -435,8 +479,7 @@ gst_quic_mux_request_new_pad (GstElement *element, GstPadTemplate *templ,
     case 'u':
       /* UNI stream requested */
 
-      pad_list = &quicmux->uni_stream_pads;
-      pad_id = quicmux->uni_stream_pad_id_next++;
+      pad_type = PAD_UNI;
 
       new_stream_query = gst_query_new_quiclib_stream (QUIC_STREAM_UNI);
 
@@ -447,52 +490,37 @@ gst_quic_mux_request_new_pad (GstElement *element, GstPadTemplate *templ,
     break;
   case 'd':
     /* Datagram pad - TODO check whether datagrams are negotiated, then go */
-    pad_list = &quicmux->datagram_stream_pads;
-    pad_id = quicmux->datagram_pad_id_next++;
+    pad_type = PAD_DATAGRAM;
     break;
   default:
     goto error;
   }
 
+  g_mutex_unlock (&quicmux->mutex);
+
   gst_caps_unref (templ_caps);
 
-  if (pad_id < 0) {
+  if (pad_type == PAD_NONE) {
     GST_WARNING_OBJECT (quicmux, "Couldn't open new stream, rejecting pad");
+    g_mutex_unlock (&quicmux->mutex);
     return NULL;
   }
 
-  stream = g_malloc (sizeof (GstQuicMuxStreamObject));
-  if (stream == NULL) {
-    GST_ERROR_OBJECT (quicmux, "Couldn't allocate new stream object!");
+  pad = gst_pad_new_from_template (templ, NULL);
 
-    return NULL;
-  }
-
-  /*
-   * Even datagrams have a stream object, but only for programming convenience.
-   */
-  g_mutex_init (&stream->mutex);
-  stream->stream_id = stream_id;
-  stream->offset = 0;
-  name = g_strdup_printf (templ->name_template, pad_id);
-  stream->sinkpad = gst_pad_new_from_template (templ, name);
-  g_free (name);
-
-  gst_pad_set_chain_function (stream->sinkpad, gst_quic_mux_chain);
-  gst_pad_set_event_function (stream->sinkpad, gst_quic_mux_sink_event);
-  gst_pad_set_query_function (stream->sinkpad, gst_quic_mux_sink_query);
-  g_signal_connect (stream->sinkpad, "linked", (GCallback) quic_mux_pad_linked,
-      NULL);
-  g_signal_connect (stream->sinkpad, "unlinked",
-      (GCallback) quic_mux_pad_unlinked, NULL);
+  gst_pad_set_chain_function (pad, gst_quic_mux_chain);
+  gst_pad_set_event_function (pad, gst_quic_mux_sink_event);
+  gst_pad_set_query_function (pad, gst_quic_mux_sink_query);
+  g_signal_connect (pad, "linked", (GCallback) quic_mux_pad_linked, NULL);
+  g_signal_connect (pad, "unlinked", (GCallback) quic_mux_pad_unlinked, NULL);
 
   /*
    * If stream_id is set to an actual stream ID, then we should be opening the
    * sending end of an extant bidi stream (and as such, no new stream query is
    * needed).
    */
-  g_assert ((stream->stream_id == G_MAXUINT64 && new_stream_query) ||
-      (stream->stream_id != G_MAXUINT64 && new_stream_query == NULL));
+  g_assert ((stream_id == G_MAXUINT64 && new_stream_query) ||
+      (stream_id != G_MAXUINT64 && new_stream_query == NULL));
 
   /*
    * Send the new stream query
@@ -503,18 +531,22 @@ gst_quic_mux_request_new_pad (GstElement *element, GstPadTemplate *templ,
 
     if (rv == TRUE) {
       GstQuicLibStreamState status;
-      gst_query_parse_new_quiclib_stream (new_stream_query, &stream->stream_id,
+      guint64 new_stream_id;
+      gst_query_parse_new_quiclib_stream (new_stream_query, &new_stream_id,
           &status);
 
       if (gst_quiclib_stream_state_is_okay (status)) {
         GST_INFO_OBJECT (quicmux, "Stream ID %ld for stream request \"%s\"",
-                  stream->stream_id, gst_pad_get_name (stream->sinkpad));
+                  new_stream_id, gst_pad_get_name (quicmux->srcpad));
         gst_query_unref (new_stream_query);
         new_stream_query = NULL;
 
-        /*
-         * Set the Stream ID on the pad caps
-         */
+        if (stream_id != G_MAXUINT64 && stream_id != new_stream_id) {
+          GST_WARNING_OBJECT (quicmux, "Couldn't get pad for requested stream "
+              "ID %lu", stream_id);
+        } else {
+          stream_id = new_stream_id;
+        }
 
       } else {
         gchar *statestr;
@@ -522,14 +554,14 @@ gst_quic_mux_request_new_pad (GstElement *element, GstPadTemplate *templ,
         statestr = g_enum_to_string (quiclib_stream_status_get_type(), status);
 
         GST_WARNING_OBJECT (quicmux, "Couldn't open new stream: %s", statestr);
-        stream->stream_id = G_MAXUINT64;
+        stream_id = G_MAXUINT64;
 
         g_free (statestr);
       }
     } else {
       GST_ERROR_OBJECT (quicmux, "Couldn't send new stream query!");
-      gst_object_unref (stream->sinkpad);
-      g_free (stream);
+      gst_object_unref (pad);
+      g_mutex_unlock (&quicmux->mutex);
       return NULL;
     }
   }
@@ -550,20 +582,21 @@ gst_quic_mux_request_new_pad (GstElement *element, GstPadTemplate *templ,
 
     GST_INFO_OBJECT (quicmux,
         "Stashing new stream request query for %s until connection ready",
-        gst_pad_get_name (stream->sinkpad));
+        gst_pad_get_name (pad));
 
-    pair->stream = stream;
     pair->query = new_stream_query;
+    pair->stream = quic_mux_new_stream_object (quicmux, G_MAXUINT64, pad);
 
     quicmux->stream_open_requests =
         g_list_append (quicmux->stream_open_requests, pair);
+  } else {
+    quic_mux_new_stream_object (quicmux, stream_id, pad);
   }
 
-  *pad_list = g_list_append (*pad_list, stream);
+  gst_element_add_pad (GST_ELEMENT (quicmux), pad);
 
-  gst_element_add_pad (GST_ELEMENT (quicmux), stream->sinkpad);
 
-  return stream->sinkpad;
+  return pad;
 
 error:
 {
@@ -582,15 +615,8 @@ gst_quic_mux_release_pad (GstElement *element, GstPad *pad)
 {
   GstQuicMux *quicmux = GST_QUICMUX (element);
 
-  if (quic_mux_close_stream_from_pad (
-      quicmux, &quicmux->bidi_stream_pads, pad, 0)) goto done;
-  if (quic_mux_close_stream_from_pad (quicmux, &quicmux->uni_stream_pads, pad,
-      0))
-    goto done;
-  quic_mux_close_stream_from_pad (quicmux, &quicmux->datagram_stream_pads,
-      pad, 0);
+  quic_mux_close_stream_from_pad (quicmux, pad, 0);
 
-done:
   GST_DEBUG_OBJECT (quicmux, "Removing pad %s", gst_pad_get_name (pad));
   gst_element_remove_pad (element, pad);
 }
@@ -680,36 +706,25 @@ gst_quic_mux_src_event (GstPad * pad, GstObject * parent, GstEvent * event)
       return TRUE;
     } else if (gst_structure_has_name (s, QUICLIB_STREAM_CLOSE)) {
       guint64 stream_id;
-      GList *it;
+      GstQuicMuxStreamObject *stream;
       /*
        * Stream has been closed, clean up any state.
        */
       gst_quiclib_parse_stream_closed_event (event, &stream_id);
 
-      if (QUICLIB_STREAM_IS_UNI (stream_id)) {
-        it = quicmux->uni_stream_pads;
+      g_mutex_lock (&quicmux->mutex);
+
+      if (g_hash_table_lookup_extended (quicmux->id_to_stream, &stream_id, NULL,
+          (gpointer *) &stream)) {
+        GstPad *pad = stream->sinkpad;
+        g_hash_table_remove (quicmux->pad_to_stream, pad);
+        g_hash_table_remove (quicmux->id_to_stream, &stream_id);
       } else {
-        it = quicmux->bidi_stream_pads;
+        GST_TRACE_OBJECT (quicmux, "Stream close for unknown stream ID %lu - "
+            "might've already been closed", stream_id);
       }
 
-      for (; it != NULL; it = it->next) {
-        GstQuicMuxStreamObject *stream = (GstQuicMuxStreamObject *) it->data;
-        g_mutex_lock (&stream->mutex);
-        if (stream->stream_id == stream_id) {
-          gst_element_remove_pad (GST_ELEMENT (quicmux), stream->sinkpad);
-          if (QUICLIB_STREAM_IS_UNI (stream_id)) {
-            quicmux->uni_stream_pads =
-                g_list_delete_link (quicmux->uni_stream_pads, it);
-          } else {
-            quicmux->bidi_stream_pads =
-                g_list_delete_link (quicmux->bidi_stream_pads, it);
-          }
-          g_mutex_unlock (&stream->mutex);
-          g_free (stream);
-          break;
-        }
-        g_mutex_unlock (&stream->mutex);
-      }
+      g_mutex_unlock (&quicmux->mutex);
 
       return TRUE;
     } else {
@@ -894,8 +909,10 @@ gst_quic_mux_request_stashed_streams (GstQuicMux *quicmux)
 
     if (rv == TRUE) {
       GstQuicLibStreamState status;
+      guint64 stream_id;
+
       gst_query_parse_new_quiclib_stream (pair->query,
-          &pair->stream->stream_id, &status);
+          &stream_id, &status);
 
       if (!gst_quiclib_stream_state_is_okay (status)) {
         gchar *statestr;
@@ -908,13 +925,13 @@ gst_quic_mux_request_stashed_streams (GstQuicMux *quicmux)
 
         gst_element_remove_pad (GST_ELEMENT (quicmux), pair->stream->sinkpad);
         gst_object_unref (pair->stream->sinkpad);
-        g_free (pair->stream);
+        gst_object_unref (pair->stream);
         g_free (pair);
 
         return FALSE;
       } else {
         GST_INFO_OBJECT (quicmux, "Stream ID %ld for stream request \"%s\"",
-            pair->stream->stream_id, gst_pad_get_name (pair->stream->sinkpad));
+            stream_id, gst_pad_get_name (pair->stream->sinkpad));
         g_cond_signal (&pair->stream->wait);
       }
     } else {
@@ -985,8 +1002,7 @@ gst_quic_mux_sink_query (GstPad *pad, GstObject *parent, GstQuery *query)
     case GST_QUERY_CUSTOM:
       if (gst_query_is_associated_stream_id (query)) {
         GstPad *local_pad;
-        GList *it;
-        guint64 stream_id = G_MAXUINT64;
+        GstQuicMuxStreamObject *stream;
 
         local_pad = gst_query_get_associated_stream_id_pad (query,
             GST_ELEMENT (mux));
@@ -995,61 +1011,31 @@ gst_quic_mux_sink_query (GstPad *pad, GstObject *parent, GstQuery *query)
           return FALSE;
         }
 
-        for (it = mux->bidi_stream_pads; it != NULL && stream_id == G_MAXUINT64;
-            it = it->next) {
-          GstQuicMuxStreamObject *stream = (GstQuicMuxStreamObject *) it->data;
-
-          if (stream->sinkpad == local_pad) {
-            stream_id = stream->stream_id;
-            break;
-          }
-        }
-
-        for (it = mux->uni_stream_pads; it != NULL && stream_id == G_MAXUINT64;
-            it = it->next) {
-          GstQuicMuxStreamObject *stream = (GstQuicMuxStreamObject *) it->data;
-
-          if (stream->sinkpad == local_pad) {
-            stream_id = stream->stream_id;
-            break;
-          }
-        }
+        stream = quic_mux_get_stream_from_pad (mux, local_pad);
 
         gst_object_unref (local_pad);
 
-        if (stream_id != G_MAXUINT64) {
-          return gst_query_fill_get_associated_stream_id (query, stream_id);
+        if (stream->stream_id != G_MAXUINT64) {
+          return gst_query_fill_get_associated_stream_id (query,
+              stream->stream_id);
         }
       } else if (gst_query_is_associated_pad (query)) {
         guint64 stream_id;
-        GList *it;
-        GstPad *pad = NULL;
+        GstQuicMuxStreamObject *stream;
+        gboolean rv = FALSE;
 
         stream_id = gst_query_get_associated_pad_stream_id (query);
 
-        for (it = mux->bidi_stream_pads; it != NULL && pad == NULL;
-            it = it->next) {
-          GstQuicMuxStreamObject *stream = (GstQuicMuxStreamObject *) it->data;
+        g_mutex_lock (&mux->mutex);
 
-          if (stream->stream_id == stream_id) {
-            pad = stream->sinkpad;
-            break;
-          }
+        if (g_hash_table_lookup_extended (mux->id_to_stream, &stream_id, NULL,
+            (gpointer *) &stream)) {
+          rv = gst_query_fill_get_associated_pad (query, stream->sinkpad);
         }
 
-        for (it = mux->uni_stream_pads; it != NULL && pad == NULL;
-            it = it->next) {
-          GstQuicMuxStreamObject *stream = (GstQuicMuxStreamObject *) it->data;
+        g_mutex_unlock (&mux->mutex);
 
-          if (stream->stream_id == stream_id) {
-            pad = stream->sinkpad;
-            break;
-          }
-        }
-
-        if (pad) {
-          return gst_query_fill_get_associated_pad (query, pad);
-        }
+        return rv;
       }
       break;
     default:

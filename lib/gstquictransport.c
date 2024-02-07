@@ -2017,8 +2017,8 @@ quiclib_ngtcp2_on_stream_close (ngtcp2_conn *quic_conn, uint32_t flags,
       "Stream %ld is closed", stream_id);
 
   if (iface->stream_closed != NULL) {
-    iface->stream_closed (gst_quiclib_transport_context_get_user (conn),
-        GST_QUICLIB_TRANSPORT_CONTEXT (conn), stream_id);
+    iface->stream_closed (iface, GST_QUICLIB_TRANSPORT_CONTEXT (conn),
+        stream_id);
   }
 
   stream->state = QUIC_STREAM_CLOSED_BOTH;
