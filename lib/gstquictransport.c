@@ -65,6 +65,9 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <gobject/gtype.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 
 GST_DEBUG_CATEGORY_STATIC (quiclib_transport);  // define category (statically)
 #define GST_CAT_DEFAULT quiclib_transport       // set as default
@@ -116,6 +119,280 @@ gst_quiclib_transport_state_get_type (void)
   }
 
   return g_type;
+}
+
+#define SOCKET_CONTROL_MESSAGE_ECN_TYPE socket_control_message_ecn_get_type ()
+G_DECLARE_FINAL_TYPE (SocketControlMessageECN, socket_control_message_ecn,
+    SOCKET_CONTROL_MESSAGE, ECN, GSocketControlMessage);
+
+struct _SocketControlMessageECN {
+  GSocketControlMessage parent;
+
+  enum {
+    ECN_NOT_ECT = 0,
+    ECN_ECT_1,
+    ECN_ECT_0,
+    ECN_ECT_CE
+  } ecn;
+};
+
+G_DEFINE_TYPE (SocketControlMessageECN, socket_control_message_ecn,
+    G_TYPE_SOCKET_CONTROL_MESSAGE);
+
+static void socket_control_message_ecn_set_property (GObject *object,
+    guint prop_id, const GValue *value, GParamSpec *pspec);
+static void socket_control_message_ecn_get_property (GObject *object,
+    guint prop_id, GValue *value, GParamSpec *pspec);
+GSocketControlMessage *socket_control_message_ecn_deserialise (int level,
+    int type, gsize size, gpointer data);
+
+enum {
+  PROP_ECN_0,
+  PROP_ECN_ECN,
+};
+
+static void
+socket_control_message_ecn_class_init (SocketControlMessageECNClass *klass)
+{
+  GObjectClass *gobject_class = G_OBJECT_CLASS (klass);
+  GSocketControlMessageClass *scmclass = G_SOCKET_CONTROL_MESSAGE_CLASS (klass);
+
+  gobject_class->set_property = socket_control_message_ecn_set_property;
+  gobject_class->get_property = socket_control_message_ecn_get_property;
+  scmclass->deserialize = socket_control_message_ecn_deserialise;
+
+  g_object_class_install_property (gobject_class, PROP_ECN_ECN,
+      g_param_spec_uint ("ecn", "ECN", "Explicit Congestion Notification mark",
+          ECN_NOT_ECT, ECN_ECT_CE, ECN_NOT_ECT,
+          G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY));
+}
+
+static void
+socket_control_message_ecn_init (SocketControlMessageECN *ecnscm)
+{
+  ecnscm->ecn = ECN_NOT_ECT;
+}
+
+static void
+socket_control_message_ecn_set_property (GObject *object, guint prop_id,
+    const GValue *value, GParamSpec *pspec)
+{
+  SocketControlMessageECN *ecnscm = SOCKET_CONTROL_MESSAGE_ECN (object);
+
+  switch (prop_id) {
+    case PROP_ECN_ECN:
+      guint32 ecn = g_value_get_uint (value);
+
+      g_return_if_fail (ecn >= ECN_NOT_ECT || ecn <= ECN_ECT_CE);
+
+      ecnscm->ecn = ecn;
+      break;
+    default:
+      G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+  }
+}
+
+static void
+socket_control_message_ecn_get_property (GObject *object, guint prop_id,
+    GValue *value, GParamSpec *pspec)
+{
+  SocketControlMessageECN *ecnscm = SOCKET_CONTROL_MESSAGE_ECN (object);
+
+  switch (prop_id) {
+    case PROP_ECN_ECN:
+      g_value_set_uint (value, ecnscm->ecn);
+      break;
+    default:
+      G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+  }
+}
+
+GSocketControlMessage *
+socket_control_message_ecn_deserialise (int level, int type, gsize size,
+    gpointer data)
+{
+  if ((level == IPPROTO_IP && type == IP_TOS) ||
+      (level == IPPROTO_IPV6 && type == IPV6_TCLASS)) {
+    guint8 ecn_mark = *(guint8 *) data;
+
+    g_return_val_if_fail (ecn_mark >= ECN_NOT_ECT || ecn_mark <= ECN_ECT_CE,
+        NULL);
+
+    return g_object_new (SOCKET_CONTROL_MESSAGE_ECN_TYPE,
+        "ecn", (guint) ecn_mark, NULL);
+  }
+
+  return NULL;
+}
+
+#define SOCKET_CONTROL_MESSAGE_PKTINFO_TYPE \
+  socket_control_message_pktinfo_get_type ()
+G_DECLARE_FINAL_TYPE (SocketControlMessagePKTINFO,
+    socket_control_message_pktinfo, SOCKET_CONTROL_MESSAGE, PKTINFO,
+    GSocketControlMessage);
+
+struct _SocketControlMessagePKTINFO {
+  GSocketControlMessage parent;
+
+  guint iface_idx;
+  GInetAddress *local_address;
+  GInetAddress *destination_address;
+};
+
+G_DEFINE_TYPE (SocketControlMessagePKTINFO, socket_control_message_pktinfo,
+    G_TYPE_SOCKET_CONTROL_MESSAGE);
+
+static void socket_control_message_pktinfo_finalise (
+    SocketControlMessagePKTINFO *pktinfoscm);
+static void socket_control_message_pktinfo_set_property (GObject *object,
+    guint prop_id, const GValue *value, GParamSpec *pspec);
+static void socket_control_message_pktinfo_get_property (GObject *object,
+    guint prop_id, GValue *value, GParamSpec *pspec);
+GSocketControlMessage *socket_control_message_pktinfo_deserialise (int level,
+    int type, gsize size, gpointer data);
+
+enum {
+  PROP_PKTINFO_0,
+  PROP_PKTINFO_IFACE_INDEX,
+  PROP_PKTINFO_LOCAL_ADDRESS_INDEX,
+  PROP_PKTINFO_DESTINATION_ADDRESS_INDEX
+};
+
+static void
+socket_control_message_pktinfo_class_init (SocketControlMessagePKTINFOClass *klass)
+{
+  GObjectClass *gobject_class = G_OBJECT_CLASS (klass);
+  GSocketControlMessageClass *scmclass = G_SOCKET_CONTROL_MESSAGE_CLASS (klass);
+
+  gobject_class->finalize = socket_control_message_pktinfo_finalise;
+  gobject_class->set_property = socket_control_message_pktinfo_set_property;
+  gobject_class->get_property = socket_control_message_pktinfo_get_property;
+  scmclass->deserialize = socket_control_message_pktinfo_deserialise;
+
+  g_object_class_install_property (gobject_class, PROP_PKTINFO_IFACE_INDEX,
+      g_param_spec_uint ("iface-idx", "Interface index",
+          "Unique index of the interface the packet was received on.",
+          0, G_MAXUINT, 0, G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY));
+
+  g_object_class_install_property (gobject_class,
+      PROP_PKTINFO_LOCAL_ADDRESS_INDEX,
+      g_param_spec_object ("local-addr", "Local address",
+          "Local address of the packet (IPv4 only)", G_TYPE_INET_ADDRESS,
+          G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY));
+
+  g_object_class_install_property (gobject_class,
+      PROP_PKTINFO_DESTINATION_ADDRESS_INDEX,
+      g_param_spec_object ("dst-addr", "Header destination address",
+          "Destination address in the packet header", G_TYPE_INET_ADDRESS,
+          G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY));
+}
+
+static void
+socket_control_message_pktinfo_init (SocketControlMessagePKTINFO *pktinfoscm)
+{
+  pktinfoscm->iface_idx = 0;
+  pktinfoscm->local_address = NULL;
+  pktinfoscm->destination_address = NULL;
+}
+
+static void
+socket_control_message_pktinfo_finalise (
+    SocketControlMessagePKTINFO *pktinfoscm)
+{
+  if (pktinfoscm->local_address) g_object_unref (pktinfoscm->local_address);
+  if (pktinfoscm->destination_address)
+    g_object_unref (pktinfoscm->destination_address);
+}
+
+static void
+socket_control_message_pktinfo_set_property (GObject *object, guint prop_id,
+    const GValue *value, GParamSpec *pspec)
+{
+  SocketControlMessagePKTINFO *pktinfoscm =
+      SOCKET_CONTROL_MESSAGE_PKTINFO (object);
+
+  switch (prop_id) {
+    case PROP_PKTINFO_IFACE_INDEX:
+      pktinfoscm->iface_idx = g_value_get_uint (value);
+      break;
+    case PROP_PKTINFO_LOCAL_ADDRESS_INDEX:
+      pktinfoscm->local_address = g_object_ref (g_value_get_object (value));
+      break;
+    case PROP_PKTINFO_DESTINATION_ADDRESS_INDEX:
+      pktinfoscm->destination_address =
+          g_object_ref (g_value_get_object (value));
+      break;
+    default:
+      G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+  }
+}
+
+static void
+socket_control_message_pktinfo_get_property (GObject *object, guint prop_id,
+    GValue *value, GParamSpec *pspec)
+{
+  SocketControlMessagePKTINFO *pktinfoscm =
+      SOCKET_CONTROL_MESSAGE_PKTINFO (object);
+
+  switch (prop_id) {
+  case PROP_PKTINFO_IFACE_INDEX:
+    g_value_set_uint (value, pktinfoscm->iface_idx);
+    break;
+  case PROP_PKTINFO_LOCAL_ADDRESS_INDEX:
+    g_value_set_object (value, pktinfoscm->local_address);
+    break;
+  case PROP_PKTINFO_DESTINATION_ADDRESS_INDEX:
+    g_value_set_object (value, pktinfoscm->destination_address);
+    break;
+    default:
+      G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+  }
+}
+
+GSocketControlMessage *
+socket_control_message_pktinfo_deserialise (int level, int type, gsize size,
+    gpointer data)
+{
+  GSocketControlMessage *msg = NULL;
+
+  if (level == IPPROTO_IP && type == IP_PKTINFO) {
+    struct in_pktinfo *pktinfo;
+    GInetAddress *local_addr, *dst_addr;
+
+    g_return_val_if_fail (size == sizeof (struct in_pktinfo), NULL);
+
+    pktinfo = (struct in_pktinfo *) data;
+
+    local_addr = g_inet_address_new_from_bytes (
+        (const guint8 *) &pktinfo->ipi_spec_dst, G_SOCKET_FAMILY_IPV4);
+    dst_addr = g_inet_address_new_from_bytes (
+        (const guint8 *) &pktinfo->ipi_addr, G_SOCKET_FAMILY_IPV4);
+
+    msg = G_SOCKET_CONTROL_MESSAGE (g_object_new (
+        SOCKET_CONTROL_MESSAGE_PKTINFO_TYPE, "iface-idx", pktinfo->ipi_ifindex,
+        "local-addr", local_addr, "dst-addr", dst_addr, NULL));
+
+    g_object_unref (local_addr);
+    g_object_unref (dst_addr);
+  } else if  (level == IPPROTO_IPV6 && type == IPV6_PKTINFO) {
+    struct in6_pktinfo *pktinfo;
+    GInetAddress *dst_addr;
+
+    g_return_val_if_fail (size == sizeof (struct in6_pktinfo), NULL);
+
+    pktinfo = (struct in6_pktinfo *) data;
+
+    dst_addr = g_inet_address_new_from_bytes (
+        (const guint8 *) &pktinfo->ipi6_addr, G_SOCKET_FAMILY_IPV6);
+
+    msg = G_SOCKET_CONTROL_MESSAGE (g_object_new (
+        SOCKET_CONTROL_MESSAGE_PKTINFO_TYPE, "iface-idx", pktinfo->ipi6_ifindex,
+        "dst-addr", dst_addr, NULL));
+
+    g_object_unref (dst_addr);
+  }
+
+  return msg;
 }
 
 typedef struct _GstQuicLibTransportBufWatchSource {
@@ -234,6 +511,9 @@ gst_quiclib_transport_context_class_init (
       g_param_spec_uint ("default_num_cids", "Default number of CIDs",
           "The default number of CIDs to negotiate for each connection",
           1, G_MAXUINT, NUM_CIDS, G_PARAM_READWRITE));
+
+  g_type_ensure (SOCKET_CONTROL_MESSAGE_ECN_TYPE);
+  g_type_ensure (SOCKET_CONTROL_MESSAGE_PKTINFO_TYPE);
 
   GST_DEBUG_CATEGORY_INIT (quiclib_transport, "quictransport", 0,
       "Base class for QUIC Transport");
@@ -2053,8 +2333,8 @@ quiclib_ngtcp2_on_stream_close (ngtcp2_conn *quic_conn, uint32_t flags,
       "Stream %ld is closed", stream_id);
 
   if (iface->stream_closed != NULL) {
-    iface->stream_closed (iface, GST_QUICLIB_TRANSPORT_CONTEXT (conn),
-        stream_id);
+    iface->stream_closed (gst_quiclib_transport_context_get_user (conn),
+        GST_QUICLIB_TRANSPORT_CONTEXT (conn), stream_id);
   }
 
   stream->state = QUIC_STREAM_CLOSED_BOTH;
@@ -2755,21 +3035,38 @@ quiclib_data_received (GSocket *socket, GIOCondition condition,
     }
 
     for (i = 0; i < num_msgs; i++) {
-      if ((g_socket_control_message_get_level (msgs[i]) == IPPROTO_IP &&
-          g_socket_control_message_get_msg_type (msgs[i]) == IP_TOS) ||
-          (g_socket_control_message_get_level (msgs[i]) == IPPROTO_IPV6 &&
-              g_socket_control_message_get_msg_type (msgs[i]) == IPV6_TCLASS)) {
+      if (SOCKET_CONTROL_MESSAGE_IS_ECN (msgs[i])) {
+        SocketControlMessageECN *ecn_scm =
+            SOCKET_CONTROL_MESSAGE_ECN (msgs [i]);
 
-        g_return_val_if_fail (
-            g_socket_control_message_get_size (msgs[i]) > sizeof (pi.ecn),
-            FALSE);
+        pi.ecn = ecn_scm->ecn;
+      } else if (SOCKET_CONTROL_MESSAGE_IS_PKTINFO (msgs[i])) {
+        SocketControlMessagePKTINFO *pktinfo_scm =
+            SOCKET_CONTROL_MESSAGE_PKTINFO (msgs [i]);
+        GSocketAddress *sa = g_socket_get_local_address (socket_ctx->socket,
+            &err);
 
-        g_socket_control_message_serialize (msgs[i], &pi.ecn);
-        continue;
+        if (sa == NULL) {
+          GST_ERROR_OBJECT (socket_ctx->owner, "Couldn't get local address: %s",
+              err->message);
+        } else {
+          local_addr = g_inet_socket_address_new (
+              pktinfo_scm->destination_address,
+              g_inet_socket_address_get_port (G_INET_SOCKET_ADDRESS (sa)));
+
+          g_object_unref (sa);
+        }
       }
+
+      g_object_unref (msgs[i]);
     }
 
-    local_addr = g_socket_get_local_address (socket_ctx->socket, &err);
+    if (msgs) g_free (msgs);
+
+    if (local_addr == NULL) {
+      local_addr = g_socket_get_local_address (socket_ctx->socket, &err);
+    }
+
     if (local_addr == NULL) {
       GST_ERROR_OBJECT (socket_ctx->owner, "Couldn't get local address: %s",
           err->message);
