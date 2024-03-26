@@ -92,6 +92,37 @@ gst_buffer_get_quiclib_stream_meta_id (GstBuffer *buffer);
 #define QUICLIB_STREAM_IS_UNI_CLIENT(id) ((id & 0x3) == 2)
 #define QUICLIB_STREAM_IS_UNI_SERVER(id) ((id & 0x3) == 3)
 
+GST_API_EXPORT GstQuery *
+gst_query_new_get_associated_stream_id (GstPad *local_pad);
+
+GST_API_EXPORT gboolean
+gst_query_is_associated_stream_id (GstQuery *query);
+
+GST_API_EXPORT GstPad *
+gst_query_get_associated_stream_id_pad (GstQuery *query, GstElement *local);
+
+GST_API_EXPORT gboolean
+gst_query_fill_get_associated_stream_id (GstQuery *query, guint64 stream_id);
+
+GST_API_EXPORT gboolean
+gst_query_parse_get_associated_stream_id (GstQuery *query, guint64 *stream_id);
+
+
+GST_API_EXPORT GstQuery *
+gst_query_new_get_associated_pad (guint64 stream_id);
+
+GST_API_EXPORT gboolean
+gst_query_is_associated_pad (GstQuery *query);
+
+GST_API_EXPORT guint64
+gst_query_get_associated_pad_stream_id (GstQuery *query);
+
+GST_API_EXPORT gboolean
+gst_query_fill_get_associated_pad (GstQuery *query, GstPad *pad);
+
+GST_API_EXPORT gboolean
+gst_query_parse_get_associated_pad (GstQuery *query, GstPad **pad);
+
 G_END_DECLS
 
 #endif /* __GST_QUICLIB_STREAM_META_H__ */

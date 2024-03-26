@@ -96,7 +96,7 @@ quiclib = library('gstquiclib',
   quiclib_sources,
   #c_args : plugin_c_args,
   dependencies : [gst_dep, gio_dep, ngtcp2_dep, ngtcp2_crypto_dep, openssl_dep,
-    crypto_dep, quicstream_dep, quicdatagram_dep],
+    crypto_dep, quicstream_dep, quicdatagram_dep, quicutils_dep],
   install : true,
   install_dir : plugins_install_dir,
   )

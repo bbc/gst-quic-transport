@@ -85,7 +85,6 @@
 #include "gstquicsink.h"
 #include "gstquicstream.h"
 #include "gstquicdatagram.h"
-#include "gstquicstreamextras.h"
 
 GST_DEBUG_CATEGORY_STATIC (gst_quic_mux_debug);
 #define GST_CAT_DEFAULT gst_quic_mux_debug

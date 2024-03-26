@@ -53,20 +53,6 @@ cdata.set_quoted('GST_PACKAGE_NAME', 'QUIC Transport Plug-ins for GStreamer')
 cdata.set_quoted('GST_PACKAGE_ORIGIN', 'https://github.com/bbc/gst-quic-transport')
 configure_file(output : 'config.h', configuration : cdata)
 
-quicstreamextras_sources = [
-  'gstquicstreamextras.c'
-  ]
-  
-gstquicstreamextras = library('gstquicstreamextras',
-  quicstreamextras_sources,
-  c_args : plugin_c_args,
-  dependencies : [gst_dep, quiclib_dep],
-  install : true,
-  install_dir : plugins_install_dir,
-)
-
-quicstreamextras_dep = declare_dependency(link_with: gstquicstreamextras)
-
 quicsrc_sources = [
   'gstquicsrc.c'
   ]
@@ -75,7 +61,7 @@ gstquicsrc = library('gstquicsrc',
   quicsrc_sources,
   c_args : plugin_c_args,
   dependencies : [gst_dep, gstbase_dep, quiclib_dep, quicstream_dep,
-    quicdatagram_dep, gio_dep],
+    quicdatagram_dep, gio_dep, quicutils_dep],
   install : true,
   install_dir : plugins_install_dir,
 )
@@ -88,7 +74,7 @@ gstquicdemux = library('gstquicdemux',
   quicdemux_sources,
   c_args : plugin_c_args,
   dependencies : [gst_dep, quicutils_dep, quiclib_dep, quicstream_dep,
-    quicdatagram_dep, quicstreamextras_dep],
+    quicdatagram_dep],
   install : true,
   install_dir : plugins_install_dir,
 )
@@ -100,8 +86,7 @@ quicmux_sources = [
 gstquicmux = library('gstquicmux',
   quicmux_sources,
   c_args : plugin_c_args,
-  dependencies : [gst_dep, quiclib_dep, quicstream_dep, quicdatagram_dep,
-    quicstreamextras_dep],
+  dependencies : [gst_dep, quiclib_dep, quicstream_dep, quicdatagram_dep, quicutils_dep],
   install : true,
   install_dir : plugins_install_dir,
 )
@@ -113,7 +98,7 @@ quicsink_sources = [
 gstquicsink = library('gstquicsink',
   quicsink_sources,
   c_args : plugin_c_args,
-  dependencies : [gst_dep, gstbase_dep, quiclib_dep, gio_dep],
+  dependencies : [gst_dep, gstbase_dep, quiclib_dep, gio_dep, quicutils_dep],
   install : true,
   install_dir : plugins_install_dir,
 )

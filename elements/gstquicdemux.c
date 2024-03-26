@@ -90,7 +90,6 @@
 #include "gstquicdemux.h"
 #include "gstquicstream.h"
 #include "gstquicdatagram.h"
-#include "gstquicstreamextras.h"
 
 #include "config.h"
 
