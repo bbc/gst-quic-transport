@@ -79,6 +79,18 @@ gstquicdemux = library('gstquicdemux',
   install_dir : plugins_install_dir,
 )
 
+install_headers ('gstquicdemux.h', subdir : meson.project_name())
+
+pkg_mod = import ('pkgconfig')
+
+pkg_mod.generate(
+  name : gstquicdemux.name(),
+  filebase : gstquicdemux.name(),
+  description : 'QUIC Demux element',
+  subdirs : gstquicdemux.name(),
+  libraries : gstquicdemux
+)
+
 quicmux_sources = [
   'gstquicmux.c'
   ]
