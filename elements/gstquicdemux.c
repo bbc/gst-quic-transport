@@ -495,6 +495,8 @@ quic_demux_open_stream_srcpad (GstQuicDemux *demux, guint64 stream_id,
   event = gst_event_new_segment (segment);
   gst_pad_push_event (pad, event);
 
+  gst_pad_sticky_events_foreach (priv->sinkpad, forward_sticky_events, pad);
+
   stream_id_ptr = g_new (gint64, 1);
   *stream_id_ptr = stream_id;
 
