@@ -109,7 +109,8 @@ quiclib_all_headers = [
   'gstquicdatagram.h',
   'gstquicstream.h',
   'gstquictransport.h',
-  'gstquicutil.h'
+  'gstquicutil.h',
+  'gstquicsignals.h'
   ]
 
 install_headers (quiclib_all_headers, subdir : meson.project_name())
