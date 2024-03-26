@@ -54,7 +54,42 @@
 
 #include <gst/gst.h>
 #include <gio/gresolver.h>
+#include <gio/gunixsocketaddress.h>
 
+G_DEFINE_BOXED_TYPE (GstQuicLibAddressList, gst_quiclib_address_list,
+    gst_quiclib_address_list_copy, gst_quiclib_address_list_free)
+
+GSocketAddress *
+_quiclib_copy_address (GSocketAddress *src, gpointer data)
+{
+  return g_object_ref (src);
+  /*switch (g_socket_address_get_family ((GSocketAddress *) src)) {
+    case G_SOCKET_FAMILY_UNIX:
+      return g_unix_socket_address_new (
+          g_unix_socket_address_get_path (G_UNIX_SOCKET_ADDRESS (src)));
+    case G_SOCKET_FAMILY_IPV4:
+    case G_SOCKET_FAMILY_IPV6:
+      return g_inet_socket_address_new (
+          g_inet_socket_address_get_address (G_INET_SOCKET_ADDRESS (src)),
+          g_inet_socket_address_get_port (G_INET_SOCKET_ADDRESS (src)));
+    default:
+      return NULL;
+  }*/
+}
+
+GstQuicLibAddressList *
+gst_quiclib_address_list_copy (GstQuicLibAddressList *list)
+{
+  GList *new = g_list_copy_deep (list, (GCopyFunc) _quiclib_copy_address, NULL);
+
+  return new;
+}
+
+void
+gst_quiclib_address_list_free (GstQuicLibAddressList *list)
+{
+  g_list_free_full (list, g_object_unref);
+}
 
 typedef struct _QuicLibEndpoint {
   GInetSocketAddress *sa;

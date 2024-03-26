@@ -287,9 +287,19 @@ gboolean
 gst_query_parse_cancelled_stream (GstQuery *query, guint64 *stream_id,
     guint64 *reason);
 
+#define GST_QUICLIB_ADDRESS_LIST (gst_quiclib_address_list_get_type ())
+
+typedef GList GstQuicLibAddressList;
+
+GType gst_quiclib_address_list_get_type (void);
+GstQuicLibAddressList * gst_quiclib_address_list_copy (GstQuicLibAddressList *l);
+void gst_quiclib_address_list_free (GstQuicLibAddressList *l);
+
 #define PROP_QUIC_ENDPOINT_COMMON_ENUMS \
   PROP_LOCATION, \
   PROP_MODE, \
+  PROP_PEER_ADDRESSES, \
+  PROP_LOCAL_ADDRESSES, \
   PROP_MAX_STREAMS_BIDI_LOCAL, \
   PROP_MAX_STREAMS_BIDI_REMOTE, \
   PROP_MAX_STREAMS_UNI_LOCAL, \
@@ -336,6 +346,8 @@ gst_query_parse_cancelled_stream (GstQuery *query, guint64 *stream_id,
 #define PROP_QUIC_ENDPOINT_COMMON_ENUM_CASES PROP_LOCATION: \
   case PROP_MODE: \
   case PROP_ALPN: \
+  case PROP_PEER_ADDRESSES: \
+  case PROP_LOCAL_ADDRESSES: \
   case PROP_MAX_STREAMS_BIDI_LOCAL: \
   case PROP_MAX_STREAMS_BIDI_REMOTE: \
   case PROP_MAX_STREAMS_UNI_LOCAL: \
@@ -393,6 +405,8 @@ gst_query_parse_cancelled_stream (GstQuery *query, guint64 *stream_id,
     gst_quiclib_common_install_location_property (klass); \
     gst_quiclib_common_install_mode_property (klass); \
     gst_quiclib_common_install_alpn_property (klass); \
+    gst_quiclib_common_install_peer_addresses_property (klass); \
+    gst_quiclib_common_install_local_addresses_property (klass); \
     gst_quiclib_common_install_privkey_location_property (klass); \
     gst_quiclib_common_install_cert_location_property (klass); \
     gst_quiclib_common_install_sni_property (klass); \
@@ -438,6 +452,23 @@ gst_query_parse_cancelled_stream (GstQuery *query, guint64 *stream_id,
           "The ALPN to negotiate in client mode, or a comma-separated list of" \
           " ALPNs to accept in server mode", QUICLIB_ALPN_DEFAULT, \
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
+#define PROP_PEER_ADDRESSES_SHORTNAME "peer-addr"
+#define gst_quiclib_common_install_peer_addresses_property(klass) \
+  g_object_class_install_property (klass, PROP_PEER_ADDRESSES, \
+      g_param_spec_boxed (PROP_PEER_ADDRESSES_SHORTNAME, "Peer addresses", \
+          "A GList of GSocketAddress objects relating to addresses of the " \
+          "peer in a QUIC connection. An empty list implies there is no " \
+          "active connection.", GST_QUICLIB_ADDRESS_LIST, G_PARAM_READABLE));
+
+#define PROP_LOCAL_ADDRESSES_SHORTNAME "local-addr"
+#define gst_quiclib_common_install_local_addresses_property(klass) \
+  g_object_class_install_property (klass, PROP_LOCAL_ADDRESSES, \
+      g_param_spec_boxed (PROP_LOCAL_ADDRESSES_SHORTNAME, "Local addresses", \
+          "A GList of GSocketAddress objects relating to local addresses of " \
+          "the QUIC connection. An empty list implies there is no active " \
+          "client connection, or there is no server listening address.", \
+		  GST_QUICLIB_ADDRESS_LIST, G_PARAM_READABLE));
 
 #define PROP_PRIVKEY_LOCATION_SHORTNAME "privkey"
 #define gst_quiclib_common_install_privkey_location_property(klass) \
@@ -682,8 +713,15 @@ gst_query_parse_cancelled_stream (GstQuery *query, guint64 *stream_id,
     if (prop_id == PROP_MODE) { \
       g_value_set_enum (value, obj->mode); \
     } else if (tctx) { \
-      g_object_get_property (G_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (tctx)),\
-          pspec->name, value); \
+      if (GST_IS_QUICLIB_TRANSPORT_CONNECTION (tctx)) { \
+        g_object_get_property (G_OBJECT (tctx), pspec->name, value); \
+      } else if (GST_IS_QUICLIB_SERVER_CONTEXT (tctx)) { \
+        g_object_get_property (G_OBJECT (tctx), pspec->name, value); \
+      } else { \
+        g_object_get_property ( \
+            G_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (tctx)), pspec->name, \
+            value); \
+      } \
     } else { \
       switch (prop_id) { \
         case PROP_LOCATION:\

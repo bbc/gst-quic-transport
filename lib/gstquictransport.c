@@ -966,6 +966,8 @@ gst_quiclib_transport_connection_class_init (
       gobject_class);
   gst_quiclib_common_install_uni_streams_remaining_remote_property (
       gobject_class);
+  gst_quiclib_common_install_peer_addresses_property (gobject_class);
+  gst_quiclib_common_install_local_addresses_property (gobject_class);
 }
 
 static void gst_quiclib_transport_connection_set_property (GObject * object,
@@ -1018,6 +1020,8 @@ static void gst_quiclib_transport_connection_set_property (GObject * object,
     }
     case PROP_BIDI_STREAMS_REMAINING_LOCAL:
     case PROP_UNI_STREAMS_REMAINING_LOCAL:
+    case PROP_PEER_ADDRESSES:
+    case PROP_LOCAL_ADDRESSES:
       g_critical ("Attempted to set read-only parameter: %s", pspec->name);
       /* no break */
     default:
@@ -1067,6 +1071,38 @@ static void gst_quiclib_transport_connection_get_property (GObject * object,
     case PROP_UNI_STREAMS_REMAINING_REMOTE:
       g_value_set_uint64 (value, conn->uni_remote_streams_remaining);
       break;
+    case PROP_PEER_ADDRESSES:
+    {
+      ngtcp2_path *path;
+      GSocketAddress *sa;
+      GList *list = NULL;
+
+      path = ngtcp2_conn_get_path (conn->quic_conn);
+      sa = g_socket_address_new_from_native (path->remote.addr,
+          path->remote.addrlen);
+
+      list = g_list_append (list, (gpointer) sa);
+
+      g_value_set_boxed (value, list);
+
+      break;
+    }
+    case PROP_LOCAL_ADDRESSES:
+    {
+      ngtcp2_path *path;
+      GSocketAddress *sa;
+      GList *list = NULL;
+
+      path = ngtcp2_conn_get_path (conn->quic_conn);
+      sa = g_socket_address_new_from_native (path->local.addr,
+          path->local.addrlen);
+
+      list = g_list_append (list, (gpointer) sa);
+
+      g_value_set_boxed (value, list);
+
+      break;
+    }
     default:
       G_OBJECT_CLASS (gst_quiclib_transport_connection_parent_class)->
         get_property (object, prop_id, value, pspec);
