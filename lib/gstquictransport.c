@@ -1269,6 +1269,10 @@ struct _GstQuicLibTransportConnection {
    */
   guint64 bidi_remote_streams_remaining;
   guint64 uni_remote_streams_remaining;
+  guint64 last_client_bidi_stream_id;
+  guint64 last_server_bidi_stream_id;
+  guint64 last_client_uni_stream_id;
+  guint64 last_server_uni_stream_id;
 
   GMutex mutex;
   GCond cond;
@@ -1276,6 +1280,8 @@ struct _GstQuicLibTransportConnection {
 
 struct _GstQuicLibStreamContext {
   GstQuicLibStreamState state;
+
+  gsize last_offset;
 
   GList *ack_bufs;
 };
@@ -2447,6 +2453,8 @@ quiclib_alloc_stream_context (GstQuicLibTransportConnection *conn,
     stream->state |= QUIC_STREAM_CLOSED_READING;
   }
 
+  stream->last_offset = 0;
+
   /*
    * If this is a remote stream opening, check whether we need to permit more
    * streams from the peer.
@@ -2512,6 +2520,13 @@ quiclib_ngtcp2_on_stream_open (ngtcp2_conn *quic_conn, int64_t stream_id,
       QUICLIB_TRANSPORT_USER_GET_IFACE (
           gst_quiclib_transport_context_get_user (conn));
   gboolean rv = TRUE;
+
+  switch (stream_id & 0x3) {
+    case 0x0: conn->last_client_bidi_stream_id = (guint64) stream_id; break;
+    case 0x1: conn->last_server_bidi_stream_id = (guint64) stream_id; break;
+    case 0x2: conn->last_client_uni_stream_id = (guint64) stream_id; break;
+    case 0x3: conn->last_server_uni_stream_id = (guint64) stream_id; break;
+  }
 
 #ifdef ASYNC_CALLBACKS
   _quiclib_transport_run_stream_open_callback (conn, stream_id);
@@ -2599,8 +2614,6 @@ quiclib_ngtcp2_on_stream_reset (ngtcp2_conn *quic_conn, int64_t stream_id,
 
   stream->state = QUIC_STREAM_CLOSED_BOTH;
   if (stream->ack_bufs == NULL) {
-    g_hash_table_remove (conn->streams, &stream_id);
-    g_free (stream);
   }
 
   return 0;
@@ -2794,36 +2807,10 @@ quiclib_timer_expired (gpointer user_data)
  */
 
 void
-quiclib_store_stream_ack_refs (GstQuicLibTransportConnection *conn,
-    guint64 stream_id, GstBuffer *orig,
-    GstBuffer *sent)
-{
-  GstQuicLibTransportUserInterface *iface =
-      QUICLIB_TRANSPORT_USER_GET_IFACE (
-          gst_quiclib_transport_context_get_user (conn));
-  GstQuicLibStreamContext *stream;
-
-  /*
-   * Only bother saving the original buffer if there's actually a callback
-   * for the acknowledgement
-   */
-  if (orig && iface->stream_ackd != NULL) {
-    GST_FIXME_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn), "TODO: Stream ACKs");
-  }
-
-  g_assert (g_hash_table_lookup_extended (conn->streams, &stream_id, NULL,
-      (gpointer *) &stream));
-
-  GST_DEBUG_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn), "Storing buf %p",
-      sent);
-
-  stream->ack_bufs = g_list_append (stream->ack_bufs, sent);
-}
-
-void
 quiclib_store_datagram_ack_ref (GstQuicLibTransportConnection *conn,
     guint64 datagram_id, GstBuffer *orig)
 {
+  gint64 *key;
   GstQuicLibTransportUserInterface *iface =
       QUICLIB_TRANSPORT_USER_GET_IFACE (
           gst_quiclib_transport_context_get_user (conn));
@@ -2953,7 +2940,7 @@ quiclib_ngtcp2_conn_write (GstQuicLibTransportConnection *conn,
     return -1;
   }
 
-  gst_buffer_map (buffer, &map, GST_MAP_WRITE);
+  gst_buffer_map (buffer, &map, GST_MAP_READ);
 
   GST_LOG_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn),
       "There are %ld bytes available in the cwnd for stream %ld",
@@ -2985,6 +2972,13 @@ quiclib_ngtcp2_conn_write (GstQuicLibTransportConnection *conn,
       "ngtcp2_conn_writev_stream: nwrite %ld, pdatalen %ld", nwrite, pdatalen);
 
   if (nwrite <= 0) {
+    if (nwrite == 0) return 0;
+
+    GST_LOG_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn),
+        "writev_stream returned %s", ngtcp2_strerror (nwrite));
+    gst_buffer_unmap (buffer, &map);
+    gst_quiclib_finish_exec_timer (tctx, "NGTCP2 error");
+
     switch (nwrite) {
     case NGTCP2_ERR_WRITE_MORE:
       GST_LOG_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn), "Wrote packet "
@@ -2996,6 +2990,18 @@ quiclib_ngtcp2_conn_write (GstQuicLibTransportConnection *conn,
     case NGTCP2_ERR_INVALID_ARGUMENT:
       return GST_QUICLIB_ERR;
     case NGTCP2_ERR_STREAM_NOT_FOUND:
+      guint64 test = 0;
+      switch (stream_id & 0x3) {
+        case 0x0: test = conn->last_client_bidi_stream_id; break;
+        case 0x1: test = conn->last_server_bidi_stream_id; break;
+        case 0x2: test = conn->last_client_uni_stream_id; break;
+        case 0x3: test = conn->last_client_uni_stream_id; break;
+      }
+
+      if (test < stream_id) {
+        return GST_QUICLIB_ERR;
+      }
+      /* Probably already been closed */
       return GST_QUICLIB_ERR_STREAM_CLOSED;
     case NGTCP2_ERR_STREAM_SHUT_WR:
       return GST_QUICLIB_ERR_STREAM_CLOSED;
@@ -4383,6 +4389,13 @@ gst_quiclib_transport_open_stream (GstQuicLibTransportConnection *conn,
     return GST_QUICLIB_ERR;
   }
 
+  switch (stream_id & 0x3) {
+    case 0x0: conn->last_client_bidi_stream_id = (guint64) stream_id; break;
+    case 0x1: conn->last_server_bidi_stream_id = (guint64) stream_id; break;
+    case 0x2: conn->last_client_uni_stream_id = (guint64) stream_id; break;
+    case 0x3: conn->last_server_uni_stream_id = (guint64) stream_id; break;
+  }
+
   if (quiclib_alloc_stream_context (conn, stream_id) == FALSE) {
     GST_ERROR_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn),
         "Failed to allocate stream context");
@@ -4390,11 +4403,6 @@ gst_quiclib_transport_open_stream (GstQuicLibTransportConnection *conn,
     ngtcp2_conn_shutdown_stream (conn->quic_conn, 0, stream_id, 0);
     gst_quiclib_transport_context_unlock (conn);
     return GST_QUICLIB_ERR;
-  }
-
-  rv = quiclib_ngtcp2_conn_write (conn, -1, NULL, 0, 0, NULL);
-  if (rv != 0) {
-    GST_ERROR_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn), "conn_write failed");
   }
 
   GST_DEBUG_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn),
@@ -4412,7 +4420,8 @@ gst_quiclib_transport_stream_state (GstQuicLibTransportConnection *conn,
 
   gst_quiclib_transport_context_lock (conn);
 
-  if (ngtcp2_conn_get_max_stream_data_left (conn->quic_conn, (gint64) stream_id) == 0) {
+  if (ngtcp2_conn_get_max_stream_data_left (conn->quic_conn, (gint64) stream_id)
+      == 0) {
     rv |= QUIC_STREAM_DATA_BLOCKED;
   }
   if (ngtcp2_conn_get_cwnd_left (conn->quic_conn) == 0) {
@@ -4666,7 +4675,7 @@ gst_quiclib_transport_close_stream (GstQuicLibTransportConnection *conn,
 {
   int rv = -1;
 
-  if (error_code) {
+  if (QUICLIB_STREAM_IS_UNI (stream_id) || error_code) {
     gst_quiclib_transport_context_lock (conn);
     rv = ngtcp2_conn_shutdown_stream (conn->quic_conn, 0, (gint64) stream_id,
         error_code);
@@ -4680,22 +4689,23 @@ gst_quiclib_transport_close_stream (GstQuicLibTransportConnection *conn,
 
 GstQuicLibError
 gst_quiclib_transport_send_buffer (GstQuicLibTransportConnection *conn,
-    GstBuffer *buf)
+    GstBuffer *buf, ssize_t *bytes_written)
 {
   GstQuicLibStreamMeta *smeta;
   GstQuicLibDatagramMeta *dmeta;
 
   smeta = gst_buffer_get_quiclib_stream_meta (buf);
   if (smeta != NULL) {
-    return gst_quiclib_transport_send_stream (conn, buf, smeta->stream_id);
+    return gst_quiclib_transport_send_stream (conn, buf, smeta->stream_id, 
+        bytes_written);
   }
 
   dmeta = gst_buffer_get_quiclib_datagram_meta (buf);
   if (dmeta != NULL) {
-    return gst_quiclib_transport_send_datagram (conn, buf, NULL);
+    return gst_quiclib_transport_send_datagram (conn, buf, NULL, bytes_written);
   }
 
-  return -1;
+  return GST_QUICLIB_ERR;
 }
 
 #if 0
@@ -4758,17 +4768,41 @@ quiclib_transport_print_buffer (GstQuicLibTransportContext *ctx, GstBuffer *buf)
 }
 #endif
 
+gboolean
+_quiclib_transport_store_ack_bufs (GstQuicLibTransportConnection *conn,
+    GstBuffer *buf, GstQuicLibStreamContext *stream, gsize size)
+{
+  GstBuffer *store;
+
+  if (gst_buffer_get_size (buf) <= size) {
+    store = gst_buffer_ref (buf);
+  } else {
+    store = gst_buffer_copy_region (buf,
+        GST_BUFFER_COPY_FLAGS | GST_BUFFER_COPY_TIMESTAMPS |
+        GST_BUFFER_COPY_META | GST_BUFFER_COPY_MEMORY, 0, size);
+  }
+
+  GST_DEBUG_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn), "Storing buffer %"
+      GST_PTR_FORMAT " of size %lu from original %lu with offset %lu", store,
+      size, gst_buffer_get_size (buf), buf->offset);
+
+  stream->ack_bufs = g_list_append (stream->ack_bufs, (gpointer) store);
+
+  return stream->ack_bufs != NULL;
+}
+
 GstQuicLibError
 gst_quiclib_transport_send_stream (GstQuicLibTransportConnection *conn,
-    GstBuffer *buf, gint64 stream_id)
+    GstBuffer *buf, gint64 stream_id, ssize_t *bytes_written)
 {
-  ssize_t bytes_written = 0;
+  ssize_t _bytes_written = 0;
   ngtcp2_vec *vec = NULL, *vec_orig;
   GList *maps = NULL;
   size_t n;
+  GstQuicLibError rv;
+  GstQuicLibStreamContext *stream;
   GstQuicLibStreamMeta *meta = gst_buffer_get_quiclib_stream_meta (buf);
   gsize buf_size = gst_buffer_get_size (buf);
-  ssize_t last_rv = -1; /* DEBUG ONLY */
 
   if (stream_id < 0 && meta != NULL) {
     stream_id = meta->stream_id;
@@ -4788,31 +4822,36 @@ gst_quiclib_transport_send_stream (GstQuicLibTransportConnection *conn,
     return GST_QUICLIB_ERR_STREAM_CLOSED;
   }
 
+  buf->offset = stream->last_offset;
+
   n = quiclib_buffer_to_vec (buf, &vec, &maps);
   vec_orig = vec;
 
   g_return_val_if_fail (n != 0, -1);
 
-  while (bytes_written < buf_size) {
-    ssize_t rv = quiclib_ngtcp2_conn_write (conn, stream_id, vec, n, 0, buf);
+  while (_bytes_written < buf_size) {
+    ssize_t _b_written = quiclib_ngtcp2_conn_write (conn, stream_id, vec, n, 0,
+      buf);
 
-    if (rv < 0) {
+    if (_b_written < 0) {
+      GST_ERROR_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn),
+          "quiclib_ngtcp2_conn_write returned error %s",
+          gst_quiclib_error_as_string((GstQuicLibError) _b_written));
+      rv = _b_written;
       break;
     }
 
-    g_assert (rv > 0 || last_rv != 0);
-    last_rv = rv;
 
-    bytes_written += rv;
+    _bytes_written += _b_written;
     GST_DEBUG_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn),
         "Written %ld bytes of data on stream %ld, %ld remaining of %ld - "
-        "cwnd %lu, stream data %lu, max data %lu", rv, stream_id,
-        buf_size - bytes_written, buf_size,
+        "cwnd %lu, stream data %lu, max data %lu", _b_written, stream_id,
+        buf_size - _bytes_written, buf_size,
         ngtcp2_conn_get_cwnd_left (conn->quic_conn),
         ngtcp2_conn_get_max_stream_data_left (conn->quic_conn, stream_id),
         ngtcp2_conn_get_max_data_left (conn->quic_conn));
 
-    if (rv == 0) {
+    if (_b_written == 0) {
       /*
        * Wait until there's flow window to send again
        */
@@ -4831,52 +4870,61 @@ gst_quiclib_transport_send_stream (GstQuicLibTransportConnection *conn,
 
       g_mutex_unlock (&conn->mutex);
     }
-    if (buf_size - bytes_written > 0) {
+    if (buf_size - _bytes_written > 0) {
       /* Adjust the vectors as necessary */
 
-      while (rv >= vec[0].len) {
-        rv -= vec[0].len;
+      while (_b_written >= vec[0].len) {
+        _b_written -= vec[0].len;
         vec += 1; /* Go to the next buffer in the vector */
         n -= 1;
       }
 
-      if (rv > 0) {
-        vec[0].base += rv;
-        vec[0].len -= (size_t) rv;
+      if (_b_written > 0) {
+        vec[0].base += _b_written;
+        vec[0].len -= (size_t) _b_written;
       }
     }
   }
 
   GST_DEBUG_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn),
-      "Written %ld total bytes from %ld", bytes_written, buf_size);
+      "Written %ld total bytes from %ld", _bytes_written, buf_size);
 
   quiclib_buffer_unmap (&maps);
 
+  stream->last_offset += (gsize) _bytes_written;
+  _quiclib_transport_store_ack_bufs (conn, buf, stream, _bytes_written);
+
   g_free (vec_orig);
 
-  return bytes_written;
+  if (bytes_written) *bytes_written = _bytes_written;
+  
+  return rv;
 }
 
 GstQuicLibError
 gst_quiclib_transport_send_datagram (GstQuicLibTransportConnection *conn,
-    GstBuffer *buf, GstQuicLibDatagramTicket *ticket)
+    GstBuffer *buf, GstQuicLibDatagramTicket *ticket, ssize_t *bytes_written)
 {
-  ssize_t bytes_written;
+  ssize_t _bytes_written;
   ngtcp2_vec *vec = NULL;
   GList *maps = NULL;
   size_t n = quiclib_buffer_to_vec (buf, &vec, &maps);
 
   g_return_val_if_fail (n != 0, -1);
 
-  bytes_written = quiclib_ngtcp2_datagram_write (conn, vec, n);
+  _bytes_written = quiclib_ngtcp2_datagram_write (conn, vec, n);
 
-  if (bytes_written > 0 && ticket != NULL) {
+  if (_bytes_written > 0 && ticket != NULL) {
 
     *ticket = conn->datagram_ticket++;
   }
 
   quiclib_buffer_unmap (&maps);
 
+  gst_quiclib_finish_exec_timer (tctx, NULL);
+
+  if (bytes_written) *bytes_written = _bytes_written;
+  
   return (bytes_written >= 0)?(GST_QUICLIB_ERR_OK):(
       (GstQuicLibError) bytes_written);
 }

@@ -177,14 +177,14 @@ struct _GstQuicLibTransportUserInterface {
 
   void (*stream_ackd) (GstQuicLibTransportUser *self,
                        GstQuicLibTransportContext *ctx, guint64 stream_id,
-                       GstBuffer *ackd_buffer);
+                       gsize offset, GstBuffer *ackd_buffer);
 
   void (*datagram_data) (GstQuicLibTransportUser *self,
                          GstQuicLibTransportContext *ctx, GstBuffer *buf);
 
   void (*datagram_ackd) (GstQuicLibTransportUser *self,
                          GstQuicLibTransportContext *ctx,
-                         guint64 datagram_ticket);
+                         GstBuffer *ackd_datagram);
 
   gboolean (*connection_error) (GstQuicLibTransportUser *self,
                                 GstQuicLibTransportContext *ctx,
@@ -278,17 +278,17 @@ gst_quiclib_transport_close_stream (GstQuicLibTransportConnection *conn,
 
 GstQuicLibError
 gst_quiclib_transport_send_buffer (GstQuicLibTransportConnection *conn,
-    GstBuffer *buf);
+    GstBuffer *buf, ssize_t *bytes_written);
 
 GstQuicLibError
 gst_quiclib_transport_send_stream (GstQuicLibTransportConnection *conn,
-								   GstBuffer *buf, gint64 stream_id);
+								   GstBuffer *buf, gint64 stream_id, ssize_t *bytes_written);
 
 typedef guint64 GstQuicLibDatagramTicket;
 
 GstQuicLibError
 gst_quiclib_transport_send_datagram (GstQuicLibTransportConnection *conn,
-    GstBuffer *buf, GstQuicLibDatagramTicket *ticket);
+    GstBuffer *buf, GstQuicLibDatagramTicket *ticket, ssize_t *bytes_written);
 
 #define GST_QUICLIB_VARINT_MAX 4611686018427387903
 /*

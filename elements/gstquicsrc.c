@@ -242,11 +242,6 @@ quicsrc_user_handshake_complete (GstQuicLibCommonUser *self,
 
   if (src->server_ctx) {
     src->conn = GST_QUICLIB_TRANSPORT_CONNECTION (ctx);
-
-    gst_quiclib_stream_flow_control_limited_signal_connect (src->conn,
-        quicsrc_stream_flow_control_limited_signal_cb, (gpointer) src);
-    gst_quiclib_conn_flow_control_limited_signal_connect (src->conn,
-        quicsrc_conn_flow_control_limited_signal_cb, (gpointer) src);
   }
 
   return TRUE;
@@ -672,10 +667,6 @@ gst_quicsrc_quiclib_connect (GstQUICSrc *src)
     src->conn = gst_quiclib_connect (GST_QUICLIB_COMMON_USER (src),
         src->location, src->alpn);
     if (src->conn == NULL) return FALSE;
-    gst_quiclib_stream_flow_control_limited_signal_connect (src->conn,
-        quicsrc_stream_flow_control_limited_signal_cb, (gpointer) src);
-    gst_quiclib_conn_flow_control_limited_signal_connect (src->conn,
-        quicsrc_conn_flow_control_limited_signal_cb, (gpointer) src);
 
     obj = G_OBJECT (src->conn);
     break;

@@ -171,7 +171,9 @@ static gboolean gst_quic_mux_sink_event (GstPad * pad,
     GstObject * parent, GstEvent * event);
 static gboolean gst_quic_mux_src_event (GstPad * pad,
     GstObject * parent, GstEvent * event);
-static GstFlowReturn gst_quic_mux_chain (GstPad * pad,
+static GstFlowReturn gst_quic_mux_stream_chain (GstPad * pad,
+    GstObject * parent, GstBuffer * buf);
+static GstFlowReturn gst_quic_mux_dgram_chain (GstPad * pad,
     GstObject * parent, GstBuffer * buf);
 
 static gboolean gst_quic_mux_element_events (GstElement *element,
@@ -716,6 +718,8 @@ gst_quic_mux_src_event (GstPad * pad, GstObject * parent, GstEvent * event)
     } else if (gst_structure_has_name (s, QUICLIB_STREAM_CLOSE)) {
       guint64 stream_id;
       GstQuicMuxStreamObject *stream;
+      GstPad *pad = NULL;
+
       /*
        * Stream has been closed, clean up any state.
        */
@@ -725,7 +729,7 @@ gst_quic_mux_src_event (GstPad * pad, GstObject * parent, GstEvent * event)
 
       if (g_hash_table_lookup_extended (quicmux->id_to_stream, &stream_id, NULL,
           (gpointer *) &stream)) {
-        GstPad *pad = stream->sinkpad;
+        pad = stream->sinkpad;
         g_hash_table_remove (quicmux->pad_to_stream, pad);
         g_hash_table_remove (quicmux->id_to_stream, &stream_id);
       } else {
@@ -733,8 +737,14 @@ gst_quic_mux_src_event (GstPad * pad, GstObject * parent, GstEvent * event)
             "might've already been closed", stream_id);
       }
 
-      g_mutex_unlock (&quicmux->mutex);
+      if (pad) {
+        GST_DEBUG_OBJECT (quicmux, "Stream %lu has closed, releasing pad %"
+            GST_PTR_FORMAT, stream_id, pad);
 
+        gst_element_release_request_pad (GST_ELEMENT (quicmux), pad);
+      }
+
+      g_mutex_unlock (&quicmux->mutex);
       return TRUE;
     } else {
       GST_WARNING_OBJECT (quicmux,
@@ -816,9 +826,6 @@ gst_quic_mux_stream_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
 
   g_mutex_unlock (&stream->mutex);
 
-  if (can_send < 0) {
-    return GST_FLOW_ERROR;
-  }
 
   /*
    * TODO: Is it to be expected for QUIC stream metas to already be on buffers?

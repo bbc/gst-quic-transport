@@ -91,15 +91,6 @@ struct _GstQuicMux
    */
   GHashTable *id_to_stream;
 
-  /*
-   * Multiple datagram pads, as we could have multiple things trying to send
-   * datagrams, but users of this functionality must be aware that there is no
-   * safety net when doing this, and all users must be mindful of any extra
-   * application-level multiplexing that should be used on these datagrams.
-   */
-  guint datagram_pad_id_next;
-  GList *datagram_stream_pads;
-
   GList *stream_open_requests;
 };
 

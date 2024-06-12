@@ -610,7 +610,7 @@ quiclib_alpns_to_list (gchar *alpns)
 
     list = g_slist_append (list, alpn);
 
-    start = end + 1;
+    start = end;
 
     while (*start == ',' || *start == ' ') {
       start++;
@@ -633,7 +633,7 @@ gst_quiclib_listen (GstQuicLibCommonUser *user, const gchar *location,
   GSList *addrs = NULL;
   GSList *alpn_list = NULL;
   GList *users = libctx->servers;
-  gchar alpn_str[strnlen (alpns, 255)];
+  gchar alpn_str[strnlen (alpns, 255) + 1];
 
   uri = quiclib_parse_location (libctx, location);
   if (!uri) {

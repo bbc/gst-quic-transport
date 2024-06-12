@@ -672,12 +672,12 @@ quicsink_user_stream_ackd (GstQuicLibCommonUser *self,
 
 static void
 quicsink_user_datagram_ackd (GstQuicLibCommonUser *self,
-    GstQuicLibTransportContext *ctx, guint64 datagram_ticket)
+    GstQuicLibTransportContext *ctx, GstBuffer *ackd_datagram)
 {
   GstQuicSink *quicsink = GST_QUICSINK (self);
 
-  GST_TRACE_OBJECT (quicsink, "TODO: Datagram ticket %lu acknowledged",
-      datagram_ticket);
+  GST_TRACE_OBJECT (quicsink, "TODO: Datagram %" GST_PTR_FORMAT " acknowledged",
+      ackd_datagram);
 }
 
 static gboolean
