@@ -554,13 +554,40 @@ static GstFlowReturn
 gst_quicsink_render (GstBaseSink * sink, GstBuffer * buffer)
 {
   GstQuicSink *quicsink = GST_QUICSINK (sink);
+  GstQuicLibTimerCtx *tctx = gst_quiclib_start_exec_timer (__func__, __LINE__);
+  gsize sent = 0, buf_size = gst_buffer_get_size (buffer);
 
-  GST_DEBUG_OBJECT (quicsink, "Received buffer of size %lu",
-      gst_buffer_get_size (buffer));
+  GST_DEBUG_OBJECT (quicsink, "Received buffer of size %lu", buf_size);
 
-  if (gst_quiclib_transport_send_buffer (quicsink->conn, buffer) < 0) {
-    GST_ERROR_OBJECT (quicsink, "Couldn't send buffer!");
-    return GST_FLOW_ERROR;
+  while (sent < buf_size) {
+    gssize b_sent = 0;
+    GstQuicLibError err = gst_quiclib_transport_send_buffer (quicsink->conn,
+        buffer, &b_sent);
+
+    GST_TRACE_OBJECT (quicsink,
+        "Send buffer returned %d (%s) with %lu bytes sent", err,
+        gst_quiclib_error_as_string (err), b_sent);
+        
+    switch (err) {
+      case GST_QUICLIB_ERR_OK:
+        break;
+      case GST_QUICLIB_ERR:
+      case GST_QUICLIB_ERR_STREAM_ID_BLOCKED:
+      case GST_QUICLIB_ERR_STREAM_DATA_BLOCKED:
+        return GST_FLOW_ERROR;
+      case GST_QUICLIB_ERR_CONN_DATA_BLOCKED:
+        return GST_FLOW_QUIC_BLOCKED;
+      case GST_QUICLIB_ERR_STREAM_CLOSED:
+        return GST_FLOW_QUIC_STREAM_CLOSED;
+      case GST_QUICLIB_ERR_PACKET_NUM_EXHAUSTED:
+        GST_ERROR_OBJECT (quicsink, "QUIC connection has exhausted its packet "
+            "number space, this connection is done!");
+        return GST_FLOW_EOS;
+    }    
+    
+    sent += (gsize) b_sent;
+    GST_TRACE_OBJECT (quicsink, "Sent %ld bytes of %lu, %lu sent total", b_sent,
+        buf_size, sent);
   }
 
   GST_DEBUG_OBJECT (quicsink, "Buffer sent");

@@ -55,11 +55,17 @@ G_BEGIN_DECLS
 G_DECLARE_DERIVABLE_TYPE (GstQuicLibTransportContext,
     gst_quiclib_transport_context, GST, QUICLIB_TRANSPORT_CONTEXT, GstObject);
 
-#define GST_QUICLIB_ERR -100
-#define GST_QUICLIB_ERR_STREAM_ID_BLOCKED -101
-#define GST_QUICLIB_ERR_STREAM_DATA_BLOCKED -102
-#define GST_QUICLIB_ERR_CONN_DATA_BLOCKED -103
-#define GST_QUICLIB_ERR_PACKET_NUM_EXHAUSTED -104
+typedef enum {
+  GST_QUICLIB_ERR_OK = 0,
+  GST_QUICLIB_ERR = -100,
+  GST_QUICLIB_ERR_STREAM_ID_BLOCKED = -101,
+  GST_QUICLIB_ERR_STREAM_DATA_BLOCKED = -102,
+  GST_QUICLIB_ERR_STREAM_CLOSED = -103,
+  GST_QUICLIB_ERR_CONN_DATA_BLOCKED = -104,
+  GST_QUICLIB_ERR_PACKET_NUM_EXHAUSTED = -105,
+} GstQuicLibError;
+
+const gchar * gst_quiclib_error_as_string (GstQuicLibError err);
 
 struct _GstQuicLibTransportContextClass {
   GstObjectClass parent_class;
@@ -270,17 +276,17 @@ gboolean
 gst_quiclib_transport_close_stream (GstQuicLibTransportConnection *conn,
     guint64 stream_id, guint64 error_code);
 
-gint64
+GstQuicLibError
 gst_quiclib_transport_send_buffer (GstQuicLibTransportConnection *conn,
     GstBuffer *buf);
 
-gint64
+GstQuicLibError
 gst_quiclib_transport_send_stream (GstQuicLibTransportConnection *conn,
 								   GstBuffer *buf, gint64 stream_id);
 
 typedef guint64 GstQuicLibDatagramTicket;
 
-gint64
+GstQuicLibError
 gst_quiclib_transport_send_datagram (GstQuicLibTransportConnection *conn,
     GstBuffer *buf, GstQuicLibDatagramTicket *ticket);
 

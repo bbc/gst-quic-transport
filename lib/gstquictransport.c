@@ -76,6 +76,22 @@ GST_DEBUG_CATEGORY_STATIC (quiclib_transport);  // define category (statically)
 
 #define OPENSSL_DEBUG
 
+const gchar *
+gst_quiclib_error_as_string (GstQuicLibError err)
+{
+  switch (err) {
+    case GST_QUICLIB_ERR: return "Generic Error";
+    case GST_QUICLIB_ERR_STREAM_ID_BLOCKED: return "Stream ID Blocked";
+    case GST_QUICLIB_ERR_STREAM_DATA_BLOCKED: return "Stream Data Blocked";
+    case GST_QUICLIB_ERR_STREAM_CLOSED: return "Stream Closed";
+    case GST_QUICLIB_ERR_CONN_DATA_BLOCKED: return "Connection Data Blocked";
+    case GST_QUICLIB_ERR_PACKET_NUM_EXHAUSTED:
+      return "Packet Number Space Exhausted";
+  }
+
+  return "Unknown Error";
+}
+
 GType
 gst_quiclib_trust_mode_get_type (void)
 {
@@ -2772,21 +2788,20 @@ quiclib_ngtcp2_conn_write (GstQuicLibTransportConnection *conn,
       g_assert (0);
       break;
     case NGTCP2_ERR_NOMEM:
-    case NGTCP2_ERR_STREAM_NOT_FOUND:
-    case NGTCP2_ERR_STREAM_SHUT_WR:
-    case NGTCP2_ERR_PKT_NUM_EXHAUSTED:
     case NGTCP2_ERR_INVALID_ARGUMENT:
+      return GST_QUICLIB_ERR;
+    case NGTCP2_ERR_STREAM_NOT_FOUND:
+      return GST_QUICLIB_ERR_STREAM_CLOSED;
+    case NGTCP2_ERR_STREAM_SHUT_WR:
+      return GST_QUICLIB_ERR_STREAM_CLOSED;
+    case NGTCP2_ERR_PKT_NUM_EXHAUSTED:
+      return GST_QUICLIB_ERR_PACKET_NUM_EXHAUSTED;
     case NGTCP2_ERR_STREAM_DATA_BLOCKED:
-      GST_LOG_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn),
-          "writev_stream returned %s", ngtcp2_strerror (nwrite));
-      gst_buffer_unmap (buffer, &map);
-      return -1;
-    case 0:
-      return 0;
+      return GST_QUICLIB_ERR_STREAM_DATA_BLOCKED;;
     default:
       GST_ERROR_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn),
           "UNKNOWN NGTCP2 RETURN CODE: %ld", nwrite);
-      g_assert (0);
+      return GST_QUICLIB_ERR;
     }
   }
 
@@ -2795,16 +2810,10 @@ quiclib_ngtcp2_conn_write (GstQuicLibTransportConnection *conn,
   nwrite = quiclib_packet_write (conn, (const gchar *) map.data, nwrite, &ps);
   if (nwrite < 0) {
     gst_buffer_unmap (buffer, &map);
-    gst_buffer_unref (buffer);
     return -1;
   }
 
-  if (stream_id >= 0) {
-    quiclib_store_stream_ack_refs (conn, stream_id, orig_ref, buffer);
-  }
-
   gst_buffer_unmap (buffer, &map);
-  gst_buffer_unref (buffer);
 
   if (pdatalen == -1) {
     pdatalen = 0;
@@ -4244,7 +4253,7 @@ gst_quiclib_transport_close_stream (GstQuicLibTransportConnection *conn,
   return (rv == 0)?(TRUE):(FALSE);
 }
 
-gint64
+GstQuicLibError
 gst_quiclib_transport_send_buffer (GstQuicLibTransportConnection *conn,
     GstBuffer *buf)
 {
@@ -4324,7 +4333,7 @@ quiclib_transport_print_buffer (GstQuicLibTransportContext *ctx, GstBuffer *buf)
 }
 #endif
 
-gint64
+GstQuicLibError
 gst_quiclib_transport_send_stream (GstQuicLibTransportConnection *conn,
     GstBuffer *buf, gint64 stream_id)
 {
@@ -4346,6 +4355,13 @@ gst_quiclib_transport_send_stream (GstQuicLibTransportConnection *conn,
       "Received %lu bytes for stream %lu", buf_size, stream_id);
 
   /*quiclib_transport_print_buffer (GST_QUICLIB_TRANSPORT_CONTEXT (conn), buf);*/
+
+  if (!g_hash_table_lookup_extended (conn->streams, &stream_id, NULL,
+      (gpointer *) &stream)){
+    GST_ERROR_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn),
+        "Couldn't find stream context for stream %ld", stream_id);
+    return GST_QUICLIB_ERR_STREAM_CLOSED;
+  }
 
   n = quiclib_buffer_to_vec (buf, &vec, &maps);
   vec_orig = vec;
@@ -4416,7 +4432,7 @@ gst_quiclib_transport_send_stream (GstQuicLibTransportConnection *conn,
   return bytes_written;
 }
 
-gint64
+GstQuicLibError
 gst_quiclib_transport_send_datagram (GstQuicLibTransportConnection *conn,
     GstBuffer *buf, GstQuicLibDatagramTicket *ticket)
 {
@@ -4436,7 +4452,8 @@ gst_quiclib_transport_send_datagram (GstQuicLibTransportConnection *conn,
 
   quiclib_buffer_unmap (&maps);
 
-  return bytes_written;
+  return (bytes_written >= 0)?(GST_QUICLIB_ERR_OK):(
+      (GstQuicLibError) bytes_written);
 }
 
 static void
