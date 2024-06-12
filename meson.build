@@ -72,5 +72,7 @@ openssl_dep = dependency('libssl')
 
 crypto_dep = dependency ('libcrypto')
 
+add_project_arguments ('-D_GNU_SOURCE', language : 'c')
+
 subdir('lib')
 subdir('elements')
