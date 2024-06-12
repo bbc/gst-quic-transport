@@ -659,10 +659,12 @@ gst_quic_demux_sink_event (GstPad * pad, GstObject * parent,
         g_return_val_if_fail (gst_quiclib_parse_stream_opened_event (event,
             &stream_id), FALSE);
 
-        GST_DEBUG_OBJECT (demux, "Stream %lu opened", stream_id);
+        GST_TRACE_OBJECT (demux, "Stream %lu opened", stream_id);
 
         /*
-         * Request a new pad
+         * The first buffer in _chain() will open the new onwards pad - this
+         * section intentionally does nothing, so the first buffer can be read
+         * and offered to peer elements.
          */
 
 
@@ -855,6 +857,13 @@ gst_quic_demux_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
       GstQuery *query;
       GList *it;
 
+      if (stream->offset != 0) {
+        GST_TRACE_OBJECT (demux, "Seen a buffer for a stream that's probably "
+            "already rejected");
+        g_rec_mutex_unlock (&priv->mutex);
+        return GST_FLOW_OK;
+      }
+
       if (stream->final && gst_buffer_get_size (buf) == 0) {
         GST_TRACE_OBJECT (demux, "Seen 0-length final buffer with no stream");
         /*
@@ -870,29 +879,11 @@ gst_quic_demux_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
           "querying %u peers for new stream", stream->stream_id,
           g_list_length (priv->peers));
 
-      if (QUICLIB_STREAM_IS_UNI (stream->stream_id)) {
-        GstMapInfo map;
-        guint64 stream_type;
-
-        gst_buffer_map (buf, &map, GST_MAP_READ);
-
-        gst_quiclib_get_varint (map.data, &stream_type);
-
-        gst_buffer_unmap (buf, &map);
-
-        query = gst_query_new_custom (GST_QUERY_CUSTOM,
-            gst_structure_new (QUICLIB_STREAM_OPEN,
-                QUICLIB_STREAMID_KEY, G_TYPE_UINT64, stream->stream_id,
-                "stream-buf-peek", G_TYPE_POINTER, (gpointer) buf,
-                "uni-stream-type", G_TYPE_UINT64, stream_type,
-                NULL));
-      } else {
-        query = gst_query_new_custom (GST_QUERY_CUSTOM,
-            gst_structure_new (QUICLIB_STREAM_OPEN,
-                QUICLIB_STREAMID_KEY, G_TYPE_UINT64, stream->stream_id,
-                "stream-buf-peek", G_TYPE_POINTER, (gpointer) buf,
-                NULL));
-      }
+      query = gst_query_new_custom (GST_QUERY_CUSTOM, gst_structure_new (
+          QUICLIB_STREAM_OPEN,
+          QUICLIB_STREAMID_KEY, G_TYPE_UINT64, stream->stream_id,
+          "stream-buf-peek", G_TYPE_POINTER, (gpointer) buf,
+          NULL));
 
       for (it = priv->peers; it != NULL; it = it->next) {
         if (gst_element_query (GST_ELEMENT (it->data), query)) {
@@ -913,6 +904,16 @@ gst_quic_demux_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
         } else {
           g_rec_mutex_unlock (&priv->mutex);
           return GST_FLOW_NOT_LINKED;
+        }
+      } else if (target_pad == NULL) {
+        GstQuery *query;
+
+        GST_FIXME_OBJECT (demux, "No peers - close/reject stream?");
+
+        query = gst_query_cancel_quiclib_stream (stream->stream_id, 0);
+        if (!gst_pad_peer_query (pad, query)) {
+          GST_WARNING_OBJECT (demux, "Couldn't cancel stream %lu",
+              stream->stream_id);
         }
       }
 
