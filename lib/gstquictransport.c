@@ -2977,7 +2977,6 @@ quiclib_ngtcp2_conn_write (GstQuicLibTransportConnection *conn,
     GST_LOG_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn),
         "writev_stream returned %s", ngtcp2_strerror (nwrite));
     gst_buffer_unmap (buffer, &map);
-    gst_quiclib_finish_exec_timer (tctx, "NGTCP2 error");
 
     switch (nwrite) {
     case NGTCP2_ERR_WRITE_MORE:

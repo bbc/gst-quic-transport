@@ -554,7 +554,6 @@ static GstFlowReturn
 gst_quicsink_render (GstBaseSink * sink, GstBuffer * buffer)
 {
   GstQuicSink *quicsink = GST_QUICSINK (sink);
-  GstQuicLibTimerCtx *tctx = gst_quiclib_start_exec_timer (__func__, __LINE__);
   gsize sent = 0, buf_size = gst_buffer_get_size (buffer);
 
   GST_DEBUG_OBJECT (quicsink, "Received buffer of size %lu", buf_size);
