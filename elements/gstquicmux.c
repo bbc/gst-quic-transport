@@ -507,7 +507,17 @@ gst_quic_mux_request_new_pad (GstElement *element, GstPadTemplate *templ,
 
   pad = gst_pad_new_from_template (templ, NULL);
 
-  gst_pad_set_chain_function (pad, gst_quic_mux_chain);
+  switch (pad_type) {
+    case PAD_BIDI:
+    case PAD_UNI:
+      gst_pad_set_chain_function (pad, gst_quic_mux_stream_chain);
+      break;
+    case PAD_DATAGRAM:
+      gst_pad_set_chain_function (pad, gst_quic_mux_dgram_chain);
+      break;
+    default:
+      g_assert (0);
+  }
   gst_pad_set_event_function (pad, gst_quic_mux_sink_event);
   gst_pad_set_query_function (pad, gst_quic_mux_sink_query);
   g_signal_connect (pad, "linked", (GCallback) quic_mux_pad_linked, NULL);
@@ -772,13 +782,13 @@ quic_mux_stream_can_send (GstQuicMux *quicmux, GstQuicMuxStreamObject *stream)
 static gboolean print_pipeline = FALSE;
 
 static GstFlowReturn
-gst_quic_mux_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
+gst_quic_mux_stream_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
 {
   GstQuicMux *quicmux;
   GstQuicMuxStreamObject *stream;
   GstQuicLibStreamMeta *smeta;
-  GstQuicLibDatagramMeta *dmeta;
-  gint can_send = 0;
+  gboolean rv;
+  guint64 buflen = gst_buffer_get_size (buf);
 
   quicmux = GST_QUICMUX (parent);
 
@@ -786,8 +796,12 @@ gst_quic_mux_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
 
   stream = quic_mux_get_stream_from_pad (quicmux, pad);
 
-  if (stream->stream_id == G_MAXUINT64) {
-    GST_DEBUG_OBJECT (quicmux, "Received buffer of size %lu bytes from pad %p "
+  if (stream == NULL) {
+    GST_WARNING_OBJECT (quicmux, "No stream associated with pad %"
+        GST_PTR_FORMAT, pad);
+    return GST_FLOW_QUIC_STREAM_CLOSED;
+  } if (stream->stream_id == G_MAXUINT64) {
+    GST_INFO_OBJECT (quicmux, "Received buffer of size %lu bytes from pad %p "
         "for as-yet unopened stream", gst_buffer_get_size (buf), pad);
   } else {
     GST_DEBUG_OBJECT (quicmux, "Received buffer of size %lu bytes from pad %p "
@@ -811,19 +825,20 @@ gst_quic_mux_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
    * Or should this element be the arbiter of the stream IDs?
    */
   smeta = gst_buffer_get_quiclib_stream_meta (buf);
-  dmeta = gst_buffer_get_quiclib_datagram_meta (buf);
 
-  if (smeta == NULL && dmeta == NULL) {
-    GstQuicMuxStreamObject *obj = quic_mux_get_stream_from_pad (quicmux, pad);
-    guint64 buflen = gst_buffer_get_size (buf);
-
-    g_return_val_if_fail (obj != NULL, GST_FLOW_ERROR);
-
-    gst_buffer_add_quiclib_stream_meta (buf, obj->stream_id, 0,
-        obj->offset + 1, buflen,
+  if (smeta != NULL) {
+    if (smeta->stream_id != stream->stream_id) {
+      GST_ERROR_OBJECT (quicmux, "Stream ID mismatch on received meta: %lu "
+          "expected, meta contained %lu", stream->stream_id, smeta->stream_id);
+      return GST_FLOW_ERROR;
+    }
+  } else {
+    gst_buffer_add_quiclib_stream_meta (buf, stream->stream_id,
+        stream->offset + 1, buflen,
         gst_buffer_has_flags (buf, GST_BUFFER_FLAG_LAST));
-    obj->offset += buflen;
   }
+
+  stream->offset += buflen;  
 
   if (print_pipeline == FALSE) {
     GstBin *pipeline = GST_BIN (gst_element_get_parent (quicmux));
@@ -841,6 +856,34 @@ gst_quic_mux_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
 
     gst_debug_bin_to_dot_file_with_ts (pipeline, GST_DEBUG_GRAPH_SHOW_ALL,
         "quicmux-chain"/*-unlinked-error"*/);
+  }
+
+  gst_object_ref (G_OBJECT (pad));
+
+  rv = gst_pad_push (quicmux->srcpad, buf);
+  GST_TRACE_OBJECT (quicmux, "Returning %d for buffer on stream %lu", rv,
+      stream->stream_id);
+  /*
+   * Check for if pad is linked, in case the stream has been closed and the sink 
+   * pad removed.
+   */
+  if (rv == GST_FLOW_QUIC_STREAM_CLOSED && gst_pad_is_linked (pad)) {
+    gst_element_remove_pad (GST_ELEMENT (quicmux), pad);
+  }
+
+  gst_object_unref (G_OBJECT (pad));
+  return rv;
+}
+
+static GstFlowReturn
+gst_quic_mux_dgram_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
+{
+  GstQuicMux *quicmux = GST_QUICMUX (parent);
+  GstQuicLibDatagramMeta *dmeta;
+
+  dmeta = gst_buffer_get_quiclib_datagram_meta (buf);
+  if (!dmeta) {
+    gst_buffer_add_quiclib_datagram_meta (buf, gst_buffer_get_size (buf));
   }
 
   return gst_pad_push (quicmux->srcpad, buf);
