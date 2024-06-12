@@ -4920,8 +4920,6 @@ gst_quiclib_transport_send_datagram (GstQuicLibTransportConnection *conn,
 
   quiclib_buffer_unmap (&maps);
 
-  gst_quiclib_finish_exec_timer (tctx, NULL);
-
   if (bytes_written) *bytes_written = _bytes_written;
   
   return (bytes_written >= 0)?(GST_QUICLIB_ERR_OK):(
