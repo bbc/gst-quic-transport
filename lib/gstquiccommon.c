@@ -503,7 +503,8 @@ quiclib_common_transport_stream_data (GstQuicLibTransportUser *self,
 
 static void
 quiclib_common_transport_stream_ackd (GstQuicLibTransportUser *self,
-    GstQuicLibTransportContext *ctx, guint64 stream_id, GstBuffer *ackd_buffer)
+    GstQuicLibTransportContext *ctx, guint64 stream_id, gsize ackd_offset,
+    GstBuffer *ackd_buffer)
 {
   GList *users = (GList *) gst_quiclib_transport_get_app_ctx (ctx);
 
@@ -512,16 +513,14 @@ quiclib_common_transport_stream_ackd (GstQuicLibTransportUser *self,
     GstQuicLibCommonUserInterface *iface =
         GST_QUICLIB_COMMON_USER_GET_IFACE (user);
     if (iface->stream_ackd != NULL) {
-      GstQuicLibStreamMeta *smeta =
-          gst_buffer_get_quiclib_stream_meta (ackd_buffer);
-      iface->stream_ackd (user, ctx, stream_id, smeta->offset + smeta->length);
+      iface->stream_ackd (user, ctx, stream_id, ackd_offset);
     }
   }
 }
 
 static void
 quiclib_common_transport_datagram_ackd (GstQuicLibTransportUser *self,
-    GstQuicLibTransportContext *ctx, guint64 datagram_ticket)
+    GstQuicLibTransportContext *ctx, GstBuffer *ackd_datagram)
 {
   GList *users = (GList *) gst_quiclib_transport_get_app_ctx (ctx);
 
@@ -530,7 +529,7 @@ quiclib_common_transport_datagram_ackd (GstQuicLibTransportUser *self,
     GstQuicLibCommonUserInterface *iface =
         GST_QUICLIB_COMMON_USER_GET_IFACE (user);
     if (iface->datagram_ackd != NULL) {
-      iface->datagram_ackd (user, ctx, datagram_ticket);
+      iface->datagram_ackd (user, ctx, ackd_datagram);
     }
   }
 }

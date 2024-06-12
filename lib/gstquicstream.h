@@ -56,7 +56,6 @@ struct _GstQuicLibStreamMeta {
 	GstMeta meta;
 
 	gint64	stream_id;
-	gint64  stream_type;
 	guint64	offset;
 	guint64	length;
 	gboolean final;
@@ -74,8 +73,7 @@ GST_API_EXPORT const GstMetaInfo
 
 GST_API_EXPORT GstQuicLibStreamMeta *
 gst_buffer_add_quiclib_stream_meta (GstBuffer *buffer, gint64 stream_id,
-									gint64 stream_type, guint64 offset,
-									guint64 length, gboolean final);
+									guint64 offset, guint64 length, gboolean final);
 
 GST_API_EXPORT GstQuicLibStreamMeta *
 gst_buffer_get_quiclib_stream_meta (GstBuffer *buffer);

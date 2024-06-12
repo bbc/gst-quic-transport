@@ -1185,6 +1185,51 @@ gst_quiclib_server_context_finalise (GstQuicLibServerContext *self)
 		if (GST_QUICLIB_TRANSPORT_CONTEXT (o)->type != QUIC_CTX_SERVER) \
 		abort (0);
 
+typedef struct {
+  GSource parent;
+
+  GstQuicLibTransportConnection *conn;
+
+  GMutex mutex;
+
+  gsize queue_len;
+  GAsyncQueue *queue;
+} GstQuicLibTransportSendQueueSource;
+
+typedef struct {
+  GSource parent;
+
+  enum {
+    CB_HANDSHAKE_COMPLETED,
+    CB_STREAM_ACK,
+    CB_STREAM_OPEN,
+    CB_STREAM_CLOSE,
+    CB_STREAM_RESET,
+    CB_DATAGRAM_ACK
+  } type;
+
+  GstQuicLibTransportConnection *conn;
+} GstQuicLibTransportCallbackSource;
+
+typedef struct {
+  GstQuicLibTransportCallbackSource source;
+
+  GSocketAddress *peer;
+} GstQuicLibTransportHandshakeCompleteCallbackSource;
+
+typedef struct {
+  GstQuicLibTransportCallbackSource source;
+
+  guint64 stream_id;
+} GstQuicLibTransportStreamIDCallbackSource;
+
+typedef struct {
+  GstQuicLibTransportCallbackSource source;
+
+  guint64 stream_id;
+  guint64 offset;
+} GstQuicLibTransportAckCallbackSource;
+
 struct _GstQuicLibTransportConnection {
   GstQuicLibTransportContext parent;
 
@@ -1192,6 +1237,9 @@ struct _GstQuicLibTransportConnection {
 
   QuicLibSocketContext *socket;
   guint watch_source;
+
+  gsize send_queue_lim;
+  GstQuicLibTransportSendQueueSource *send_queue_source;
 
   gchar *alpn;
 
@@ -1211,6 +1259,9 @@ struct _GstQuicLibTransportConnection {
 
   /** GHashTable<gint64 (stream id), GstQuicLibStreamContext> */
   GHashTable *streams;
+
+  /** GHashTable <gint64 (datagram ticket), GstBuffer> */
+  GHashTable *datagrams_awaiting_ack;
 
   /*
    * ngtcp2 doesn't give us this information directly, only local streams
@@ -1481,6 +1532,8 @@ gst_quiclib_transport_connection_init (GstQuicLibTransportConnection *self)
   self->ssl = NULL;
   self->streams = g_hash_table_new_full (g_int64_hash, g_int64_equal,
       quiclib_hash_key_destroy, g_free);
+  self->datagrams_awaiting_ack = g_hash_table_new_full (g_int64_hash,
+      g_int64_equal, g_free, (GDestroyNotify) gst_buffer_unref);
   ngtcp2_ccerr_default (&self->last_error);
   ngtcp2_transport_params_default (&self->transport_params);
 
@@ -1549,6 +1602,11 @@ gst_quiclib_transport_connection_finalise (GstQuicLibTransportConnection *self)
   if (self->streams) {
     g_hash_table_destroy (self->streams);
     self->streams = NULL;
+  }
+
+  if (self->datagrams_awaiting_ack) {
+    g_hash_table_destroy (self->datagrams_awaiting_ack);
+    self->datagrams_awaiting_ack = NULL;
   }
 
   if (self->ssl) {
@@ -1987,6 +2045,176 @@ quiclib_ngtcp2_print (void *user_data, const char *format, ...)
   va_end (args);
 }
 
+#define ASYNC_CALLBACKS 1
+
+const gchar *
+_quiclib_transport_callback_type_to_string (int type) {
+  switch (type) {
+    case CB_HANDSHAKE_COMPLETED: return "handshake completed";
+    case CB_STREAM_ACK: return "stream ACK";
+    case CB_STREAM_OPEN: return "stream open";
+    case CB_STREAM_CLOSE: return "stream close";
+    case CB_STREAM_RESET: return "stream reset";
+    case CB_DATAGRAM_ACK: return "datagram ACK";
+  }
+  return "unknown";
+}
+
+static gboolean
+_quiclib_transport_callback_source_prepare (GSource *source, gint *timeout)
+{
+  GstQuicLibTransportCallbackSource *cb_source =
+      (GstQuicLibTransportCallbackSource *) source;
+  GST_TRACE_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (cb_source->conn),
+      "Prepare async callback of type %s",
+      _quiclib_transport_callback_type_to_string (cb_source->type));
+  return TRUE;
+}
+
+static gboolean
+_quiclib_transport_callback_source_dispatch (GSource *source, GSourceFunc cb,
+    gpointer user_data)
+{
+  GstQuicLibTransportCallbackSource *cb_source =
+      (GstQuicLibTransportCallbackSource *) source;
+  GstQuicLibTransportConnection * conn = cb_source->conn;
+  GstQuicLibTransportUserInterface *iface = QUICLIB_TRANSPORT_USER_GET_IFACE (
+      gst_quiclib_transport_context_get_user (conn));
+
+  GST_TRACE_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn),
+      "Dispatching async callback of type %s",
+      _quiclib_transport_callback_type_to_string (cb_source->type));
+
+  switch (cb_source->type) {
+    case CB_HANDSHAKE_COMPLETED:
+      if (iface->handshake_complete != NULL) {
+        GstQuicLibTransportHandshakeCompleteCallbackSource *hc_source =
+            (GstQuicLibTransportHandshakeCompleteCallbackSource *) cb_source;
+        gboolean rv = iface->handshake_complete (
+            gst_quiclib_transport_context_get_user (conn),
+            &conn->parent, conn, G_INET_SOCKET_ADDRESS (hc_source->peer),
+            conn->alpn);
+        g_object_unref (hc_source->peer);
+        if (rv == FALSE) {
+          GST_WARNING_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn),
+              "Transport user indicated handshake was unacceptable");
+          /* TODO: Tear down connection */
+        }
+      }
+      break;
+    case CB_STREAM_ACK:
+      /* TODO: Implement application buffer acknowledgements */
+      GST_FIXME_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn),
+          "Need to implement app buffer acknowledgements");
+      break;
+    case CB_STREAM_OPEN:
+      if (iface->stream_opened != NULL) {
+        GstQuicLibTransportStreamIDCallbackSource *sid_source =
+            (GstQuicLibTransportStreamIDCallbackSource *) cb_source;
+        if (!iface->stream_opened (gst_quiclib_transport_context_get_user (conn),
+            GST_QUICLIB_TRANSPORT_CONTEXT (conn), sid_source->stream_id)) {
+          GST_FIXME_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn),
+              "Need to implement closing stream async");
+        }
+      }
+      break;
+    case CB_STREAM_CLOSE:
+    case CB_STREAM_RESET:
+      if (iface->stream_closed != NULL) {
+        GstQuicLibTransportStreamIDCallbackSource *sid_source =
+            (GstQuicLibTransportStreamIDCallbackSource *) cb_source;
+        iface->stream_closed (gst_quiclib_transport_context_get_user (conn),
+            GST_QUICLIB_TRANSPORT_CONTEXT (conn), sid_source->stream_id);
+      }
+      break;
+    case CB_DATAGRAM_ACK:
+      /* TODO: Implement application buffer acknowledgements */
+      GST_FIXME_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn),
+          "Need to implement app buffer acknowledgements");
+      break;
+  }
+
+  return FALSE; /* Don't keep this source around after firing */
+}
+
+static GSourceFuncs _quiclib_transport_callback_source_funcs = {
+    .prepare = _quiclib_transport_callback_source_prepare,
+    .check = NULL,
+    .dispatch = _quiclib_transport_callback_source_dispatch,
+    .finalize = NULL
+};
+
+void
+_quiclib_transport_run_handshake_complete_callback (
+    GstQuicLibTransportConnection *conn, GSocketAddress *sa)
+{
+  GstQuicLibTransportHandshakeCompleteCallbackSource *hc_source;
+  GstQuicLibTransportContextPrivate *priv =
+      gst_quiclib_transport_context_get_instance_private (
+          GST_QUICLIB_TRANSPORT_CONTEXT (conn));
+
+  hc_source = (GstQuicLibTransportHandshakeCompleteCallbackSource *)
+      g_source_new (&_quiclib_transport_callback_source_funcs,
+          sizeof (GstQuicLibTransportHandshakeCompleteCallbackSource));
+
+  hc_source->peer = (GSocketAddress *) g_object_ref (G_OBJECT (sa));
+  hc_source->source.type = CB_HANDSHAKE_COMPLETED;
+  hc_source->source.conn = conn;
+
+  g_source_attach ((GSource *) hc_source, priv->loop_context);
+}
+
+void
+_quiclib_transport_run_stream_id_callback (GstQuicLibTransportConnection *conn,
+    int type, guint64 stream_id)
+{
+  GstQuicLibTransportStreamIDCallbackSource *sid_source;
+  GstQuicLibTransportContextPrivate *priv =
+      gst_quiclib_transport_context_get_instance_private (
+          GST_QUICLIB_TRANSPORT_CONTEXT (conn));
+
+  sid_source = (GstQuicLibTransportStreamIDCallbackSource *)
+      g_source_new (&_quiclib_transport_callback_source_funcs,
+          sizeof (GstQuicLibTransportStreamIDCallbackSource));
+
+  sid_source->stream_id = stream_id;
+  sid_source->source.type = type;
+  sid_source->source.conn = conn;
+
+  g_source_attach ((GSource *) sid_source, priv->loop_context);
+}
+
+#define _quiclib_transport_run_stream_open_callback(conn, stream_id) \
+  _quiclib_transport_run_stream_id_callback (conn, CB_STREAM_OPEN, stream_id)
+
+#define _quiclib_transport_run_stream_close_callback(conn, stream_id) \
+  _quiclib_transport_run_stream_id_callback (conn, CB_STREAM_CLOSE, stream_id)
+
+#define _quiclib_transport_run_stream_reset_callback(conn, stream_id) \
+  _quiclib_transport_run_stream_id_callback (conn, CB_STREAM_RESET, stream_id)
+
+void
+_quiclib_transport_run_ack_callback (GstQuicLibTransportConnection *conn,
+    guint64 stream_id, guint64 offset)
+{
+  GstQuicLibTransportAckCallbackSource *ack_source;
+  GstQuicLibTransportContextPrivate *priv =
+      gst_quiclib_transport_context_get_instance_private (
+          GST_QUICLIB_TRANSPORT_CONTEXT (conn));
+
+  ack_source = (GstQuicLibTransportAckCallbackSource *)
+      g_source_new (&_quiclib_transport_callback_source_funcs,
+          sizeof (GstQuicLibTransportAckCallbackSource));
+
+  ack_source->stream_id = stream_id;
+  ack_source->offset = offset;
+  ack_source->source.type =
+      (stream_id > QUICLIB_VARINT_MAX)?(CB_DATAGRAM_ACK):(CB_STREAM_ACK);
+  ack_source->source.conn = conn;
+
+  g_source_attach ((GSource *) ack_source, priv->loop_context);
+}
+
 int
 quiclib_ngtcp2_handshake_completed (ngtcp2_conn *quic_conn, void *user_data)
 {
@@ -2084,8 +2312,7 @@ quiclib_ngtcp2_recv_stream_data (ngtcp2_conn *quic_conn, uint32_t flags,
   buffer->offset = offset;
   buffer->offset_end = offset + datalen;
 
-  gst_buffer_add_quiclib_stream_meta (buffer, stream_id, 0, offset, datalen,
-      fin);
+  gst_buffer_add_quiclib_stream_meta (buffer, stream_id, offset, datalen, fin);
 
   iface->stream_data (gst_quiclib_transport_context_get_user (conn),
       GST_QUICLIB_TRANSPORT_CONTEXT (conn), buffer);
@@ -2132,56 +2359,36 @@ quiclib_ngtcp2_ack_stream (ngtcp2_conn *quic_conn, int64_t stream_id,
       (GstQuicLibTransportConnection *) user_data;
   GstQuicLibStreamContext *stream =
       (GstQuicLibStreamContext *) stream_user_data;
-  GList *buf;
+  GstQuicLibTransportUserInterface *iface =
+      QUICLIB_TRANSPORT_USER_GET_IFACE (
+          gst_quiclib_transport_context_get_user (conn));
+  GList *bufs;
 
   GST_LOG_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn),
         "Received ACK for stream %ld, for %lu bytes at offset %lu", stream_id,
         datalen, offset);
 
-  /*
-   * Free buffers associated with this
-   */
-  buf = g_list_first (stream->ack_bufs);
-  while (buf != NULL) {
-    GstBuffer *sent_buf = (GstBuffer *) buf->data;
+  bufs = g_list_first (stream->ack_bufs);
+  while (bufs != NULL) {
+    GstBuffer *sent_buf = (GstBuffer *) bufs->data;
 
-  /*
-   * TODO: How to manage the app buffer acknowledgements.
-   *
-   * Consider an app buffer a, which is sent as part of sent buffers s1,
-   * s2 and s3.
-   *
-   * +------------------------------------------------------------+
-   * |                   Application buffer a                     |
-   * +-------------------+-------------------+--------------------+
-   * | App buffer part 1 | App buffer part 2 | App buffer part 3  |
-   * +-------------------+-------------------+--------------------+
-   *          |                    |                    |
-   *          v                    v                    v
-   *   +---------------+   +---------------+   +---------------+
-   *   |      s1       |   |       s2      |   |      s3       |
-   *   +---------------+   +---------------+   +---------------+
-   *
-   * We can only tell the application that buffer a has been acknowledged
-   * when s1, s2 and s3 have all been acknowledged.
-   *
-   * Equally, sent buffers could contain one or more parts of different
-   * application buffers!
-   */
-#define NO_APP_ACKNOWLEDGEMENTS 1
-#ifndef NO_APP_ACKNOWLEDGEMENTS
-#error "Need to implement application buffer acknowledgements!"
-#endif
-    if (offset == sent_buf->offset) {
+    if ((offset + datalen) >=
+        (sent_buf->offset + gst_buffer_get_size (sent_buf))) {
+      GST_LOG_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn),
+          "Dropping acknowledged buffer for stream %ld, length %lu at offset "
+          "%lu", stream_id, gst_buffer_get_size (sent_buf), sent_buf->offset);
+
+      if (iface->stream_ackd) {
+        iface->stream_ackd (gst_quiclib_transport_context_get_user (conn),
+            GST_QUICLIB_TRANSPORT_CONTEXT (conn), (guint64) stream_id,
+            (gsize) offset, sent_buf);
+      }
+
       gst_buffer_unref (sent_buf);
-
-      GST_DEBUG_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn), "Removing buf %p",
-          buf);
-
-      stream->ack_bufs = g_list_delete_link (stream->ack_bufs, buf);
-      break;
+      bufs = stream->ack_bufs = g_list_delete_link (stream->ack_bufs, bufs);
+    } else {
+      bufs = bufs->next;
     }
-    buf = buf->next;
   }
 
   if (stream->state == QUIC_STREAM_CLOSED_BOTH && stream->ack_bufs == NULL) {
@@ -2197,35 +2404,27 @@ quiclib_ngtcp2_ack_datagram (ngtcp2_conn *quic_conn, uint64_t dgram_id,
 {
   GstQuicLibTransportConnection *conn =
       (GstQuicLibTransportConnection *) user_data;
-#ifndef NO_APP_ACKNOWLEDGEMENTS
   GstQuicLibTransportUserInterface *iface =
       QUICLIB_TRANSPORT_USER_GET_IFACE (
           gst_quiclib_transport_context_get_user (conn));
-#endif
 
   GST_LOG_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn),
       "Received ACK for datagram %lu", dgram_id);
 
-#ifndef NO_APP_ACKNOWLEDGEMENTS
-  GList *dg = g_list_first (conn->datagram_bufs_waiting_acks);
-  while (dg != NULL) {
-    GstQuicLibDatagramBuffers *buf =
-        (GstQuicLibDatagramBuffers *) dg->data;
-    if (buf->datagram_id == dgram_id) {
-      if (iface->datagram_ackd != NULL) {
-        iface->datagram_ackd (
-            gst_quiclib_transport_context_get_user (conn),
-            GST_QUICLIB_TRANSPORT_CONTEXT (conn), dgram_id);
-        gst_buffer_unref (buf->buf);
-      }
-      g_free (buf);
-      conn->datagram_bufs_waiting_acks =
-          g_list_remove (conn->datagram_bufs_waiting_acks, dg);
-      break;
+  if (iface->datagram_ackd) {
+    GstBuffer *buf;
+    if (!g_hash_table_lookup_extended (conn->datagrams_awaiting_ack, &dgram_id,
+        NULL, (gpointer *) &buf)) {
+      GST_ERROR_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn),
+          "Couldn't find matching buffer for datagram ticket %lu?", dgram_id);
+      return 0;
     }
-    dg = dg->next;
+    iface->datagram_ackd (gst_quiclib_transport_context_get_user (conn),
+        GST_QUICLIB_TRANSPORT_CONTEXT (conn), buf);
   }
-#endif
+
+  g_hash_table_remove (conn->datagrams_awaiting_ack, (gconstpointer) &dgram_id);
+
   return 0;
 }
 
@@ -2314,10 +2513,14 @@ quiclib_ngtcp2_on_stream_open (ngtcp2_conn *quic_conn, int64_t stream_id,
           gst_quiclib_transport_context_get_user (conn));
   gboolean rv = TRUE;
 
+#ifdef ASYNC_CALLBACKS
+  _quiclib_transport_run_stream_open_callback (conn, stream_id);
+#else
   if (iface->stream_opened != NULL) {
     rv = iface->stream_opened (gst_quiclib_transport_context_get_user (conn),
         GST_QUICLIB_TRANSPORT_CONTEXT (conn), stream_id);
   }
+#endif
 
   if (rv == TRUE) {
     rv = quiclib_alloc_stream_context (conn, stream_id);
@@ -2348,10 +2551,14 @@ quiclib_ngtcp2_on_stream_close (ngtcp2_conn *quic_conn, uint32_t flags,
   GST_DEBUG_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn),
       "Stream %ld is closed", stream_id);
 
+#ifdef ASYNC_CALLBACKS
+  _quiclib_transport_run_stream_close_callback (conn, stream_id);
+#else
   if (iface->stream_closed != NULL) {
     iface->stream_closed (gst_quiclib_transport_context_get_user (conn),
         GST_QUICLIB_TRANSPORT_CONTEXT (conn), stream_id);
   }
+#endif
 
   stream->state = QUIC_STREAM_CLOSED_BOTH;
   if (stream->ack_bufs == NULL) {
@@ -2381,10 +2588,14 @@ quiclib_ngtcp2_on_stream_reset (ngtcp2_conn *quic_conn, int64_t stream_id,
       "Stream %ld was reset after %lu bytes with error code %lu", stream_id,
       final_size, app_error_code);
 
+#ifdef ASYNC_CALLBACKS
+  _quiclib_transport_run_stream_reset_callback (conn, stream_id);
+#else
   if (iface->stream_closed != NULL) {
     iface->stream_closed (gst_quiclib_transport_context_get_user (conn),
         GST_QUICLIB_TRANSPORT_CONTEXT (conn), stream_id);
   }
+#endif
 
   stream->state = QUIC_STREAM_CLOSED_BOTH;
   if (stream->ack_bufs == NULL) {
@@ -2618,20 +2829,14 @@ quiclib_store_datagram_ack_ref (GstQuicLibTransportConnection *conn,
           gst_quiclib_transport_context_get_user (conn));
   if (iface->datagram_ackd == NULL) return;
 
-#ifndef NO_APP_ACKNOWLEDGEMENTS
+  key = g_malloc (sizeof (gint64));
+  *key = datagram_id;
 
-  GstQuicLibDatagramBuffers *buf = g_new0 (GstQuicLibDatagramBuffers, 1);
-  assert (buf != NULL);
-
-  buf->datagram_id = datagram_id;
-  buf->buf = orig;
-
-  gst_buffer_ref (buf->buf);
-  conn->datagram_bufs_waiting_acks =
-      g_list_append (conn->datagram_bufs_waiting_acks, buf);
-#else
-  GST_WARNING_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn), "TODO: Datagram ACKs");
-#endif
+  if (!g_hash_table_insert (conn->datagrams_awaiting_ack, (gpointer) key, 
+      (gpointer) gst_buffer_ref (orig))) {
+    GST_ERROR_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn),
+        "Couldn't add datagram buffer to awaiting ack hashtable");
+  }
 }
 
 gboolean
@@ -4233,6 +4438,226 @@ gst_quiclib_transport_stream_state (GstQuicLibTransportConnection *conn,
   }
 
   return rv;
+}
+
+typedef struct _GstQuicLibStreamClose GstQuicLibStreamClose;
+
+struct _GstQuicLibStreamClose {
+  GstMiniObject mini_object;
+
+  guint64 stream_id;
+  guint64 error_close;
+};
+
+GST_DEFINE_MINI_OBJECT_TYPE (GstQuicLibStreamClose, gst_quiclib_stream_close);
+
+#define QUICLIB_TYPE_STREAM_CLOSE gst_quiclib_stream_close_get_type ()
+#define QUICLIB_IS_STREAM_CLOSE(obj) \
+    (GST_IS_MINI_OBJECT_TYPE (obj, QUICLIB_TYPE_STREAM_CLOSE))
+#define QUICLIB_STREAM_CLOSE_CAST(obj) ((GstQuicLibStreamClose *) obj)
+
+GstQuicLibStreamClose *
+gst_quiclib_stream_close_new (guint64 stream_id, guint64 reason)
+{
+  GstQuicLibStreamClose *obj;
+
+  obj = g_new (GstQuicLibStreamClose, 1);
+
+  gst_mini_object_init (GST_MINI_OBJECT_CAST (obj), 0,
+      QUICLIB_TYPE_STREAM_CLOSE, NULL, NULL, NULL);
+
+  obj->stream_id = stream_id;
+  obj->error_close = reason;
+
+  return obj;
+}
+
+#define gst_quiclib_stream_close_ref(obj) \
+    (GstQuicLibStreamClose *) gst_mini_object_ref (GST_MINI_OBJECT_CAST (obj));
+
+#define gst_quiclib_stream_close_unref(obj) \
+    gst_mini_object_unref (GST_MINI_OBJECT_CAST (obj));
+
+static gboolean
+_quiclib_transport_send_queue_source_prepare (GSource *source, gint *timeout)
+{
+  GstQuicLibTransportSendQueueSource *send_queue_src =
+      (GstQuicLibTransportSendQueueSource *) source;
+
+  GST_TRACE_OBJECT (send_queue_src->conn,
+      "send_queue_source_prepare: cwnd %lu, queue length: %u, bytes: %lu",
+      ngtcp2_conn_get_cwnd_left (send_queue_src->conn->quic_conn),
+      g_async_queue_length (send_queue_src->queue), send_queue_src->queue_len);
+
+  return (ngtcp2_conn_get_cwnd_left (send_queue_src->conn->quic_conn) &&
+      g_async_queue_length (send_queue_src->queue) > 0);
+}
+
+static gboolean
+_quiclib_transport_send_queue_source_dispatch (GSource *source, GSourceFunc cb,
+    gpointer user_data)
+{
+  GstQuicLibTransportSendQueueSource *send_queue_src =
+      (GstQuicLibTransportSendQueueSource *) source;
+  GstMiniObject *obj;
+  GQueue *replace = g_queue_new ();
+
+  for (obj = GST_MINI_OBJECT (g_async_queue_pop (send_queue_src->queue));
+      obj != NULL;
+      obj = GST_MINI_OBJECT (g_async_queue_try_pop (send_queue_src->queue))) {
+
+    if (GST_IS_BUFFER (obj)) {
+      GstQuicLibStreamMeta *smeta;
+      GstQuicLibDatagramMeta *dmeta;
+      gssize bytes_sent = 0;
+      GstQuicLibError err = GST_QUICLIB_ERR_OK;
+      GstBuffer *buf = GST_BUFFER (obj);
+
+      smeta = gst_buffer_get_quiclib_stream_meta (buf);
+      if (smeta != NULL) {
+        GST_TRACE_OBJECT (send_queue_src->conn, "Buffer of size %lu for stream "
+            "ID %lu to send, stream data remaining %lu",
+            gst_buffer_get_size (buf), smeta->stream_id,
+            ngtcp2_conn_get_max_stream_data_left (
+                send_queue_src->conn->quic_conn, smeta->stream_id));
+        if (ngtcp2_conn_get_max_stream_data_left (send_queue_src->conn->quic_conn,
+            smeta->stream_id) >= gst_buffer_get_size (buf)) {
+          err = gst_quiclib_transport_send_stream (send_queue_src->conn,
+              buf, smeta->stream_id, &bytes_sent);
+        }
+      }
+
+      dmeta = gst_buffer_get_quiclib_datagram_meta (buf);
+      if (dmeta != NULL) {
+        GST_TRACE_OBJECT (send_queue_src->conn, "Buffer of size %lu for "
+            "datagram to send", gst_buffer_get_size (buf));
+        err = gst_quiclib_transport_send_datagram (send_queue_src->conn,
+            buf, NULL, &bytes_sent);
+      }
+
+      if (err < 0) {
+        /* An error! */
+        GST_TRACE_OBJECT (send_queue_src->conn,
+            "An error was encountered when sending buffer! %s",
+            gst_quiclib_error_as_string(err));
+        break;
+      } else if (bytes_sent < gst_buffer_get_size (buf)) {
+        GST_TRACE_OBJECT (send_queue_src->conn,
+            "Managed to send %ld bytes of %ld", bytes_sent,
+            gst_buffer_get_size (buf));
+        if (bytes_sent > 0) {
+          /*
+           * Resize the buffer to account for what's been sent
+           */
+          gst_buffer_resize (buf, bytes_sent, -1);
+        }
+
+        g_queue_push_tail (replace, (gpointer) buf);
+      }
+
+      g_mutex_lock (&send_queue_src->mutex);
+      send_queue_src->queue_len -= bytes_sent;
+      g_mutex_unlock (&send_queue_src->mutex);
+    } else if (QUICLIB_IS_STREAM_CLOSE (obj)) {
+      GstQuicLibStreamClose *close_obj = QUICLIB_STREAM_CLOSE_CAST (obj);
+      GList *it;
+      gboolean needs_queuing = FALSE;
+
+      GST_TRACE_OBJECT (send_queue_src->conn, "Queued stream close %lu",
+          close_obj->stream_id);
+
+      for (it = replace->head; it != NULL; it = it->next) {
+        if (GST_IS_BUFFER (it->data)) {
+          GstQuicLibStreamMeta *smeta =
+              gst_buffer_get_quiclib_stream_meta (GST_BUFFER (it->data));
+          if (smeta != NULL &&
+              ((guint64) smeta->stream_id == close_obj->stream_id)) {
+            needs_queuing = TRUE;
+            break;
+          }
+        }
+      }
+
+      if (needs_queuing) {
+        GST_TRACE_OBJECT (send_queue_src->conn,
+            "Still data to send for stream %lu, requeueing",
+            close_obj->stream_id);
+        g_queue_push_tail (replace, (gpointer) obj);
+      } else if (QUICLIB_STREAM_IS_UNI (close_obj->stream_id) ||
+          close_obj->error_close) {
+        GST_TRACE_OBJECT (send_queue_src->conn,
+            "Forcing shutdown of stream %lu", close_obj->stream_id);
+        gst_quiclib_transport_context_lock (send_queue_src->conn);
+        if (ngtcp2_conn_shutdown_stream (send_queue_src->conn->quic_conn, 0,
+            (gint64) close_obj->stream_id, close_obj->error_close) != 0) {
+          GST_ERROR_OBJECT (obj, "Couldn't shut down stream %lu",
+              close_obj->stream_id);
+        }
+        gst_quiclib_transport_context_unlock (send_queue_src->conn);
+      } else if (quiclib_ngtcp2_conn_write (send_queue_src->conn,
+            close_obj->stream_id, NULL, 0, 1, NULL) != 0) {
+        GST_ERROR_OBJECT (obj, "Couldn't write end-of-stream for stream %lu",
+            close_obj->stream_id);
+      }
+    }
+  }
+
+  if (g_queue_get_length (replace)) {
+    GstMiniObject *obj;
+
+    g_async_queue_lock (send_queue_src->queue);
+
+    for (obj = GST_MINI_OBJECT (g_queue_pop_tail (replace)); obj != NULL;
+        obj = GST_MINI_OBJECT (g_queue_pop_tail (replace))) {
+      g_async_queue_push_front_unlocked (send_queue_src->queue, (gpointer) obj);
+    }
+
+    g_async_queue_unlock (send_queue_src->queue);
+  }
+
+  g_queue_free (replace);
+
+  return TRUE;
+}
+
+static void
+_quiclib_transport_send_queue_source_finalize (GSource *source)
+{
+  GstQuicLibTransportSendQueueSource *send_queue_src =
+      (GstQuicLibTransportSendQueueSource *) source;
+
+  g_async_queue_unref (send_queue_src->queue);
+}
+
+static GSourceFuncs _quiclib_transport_send_queue_source_funcs = {
+    .prepare = _quiclib_transport_send_queue_source_prepare,
+    .check = NULL,
+    .dispatch = _quiclib_transport_send_queue_source_dispatch,
+    .finalize = _quiclib_transport_send_queue_source_finalize
+};
+
+void
+_ensure_quiclib_send_queue (GstQuicLibTransportConnection *conn)
+{
+  if (conn->send_queue_source == NULL) {
+    GstQuicLibTransportContextPrivate *priv =
+        gst_quiclib_transport_context_get_instance_private (
+            GST_QUICLIB_TRANSPORT_CONTEXT (conn));
+
+    conn->send_queue_source = (GstQuicLibTransportSendQueueSource *)
+        g_source_new (&_quiclib_transport_send_queue_source_funcs,
+          sizeof (GstQuicLibTransportSendQueueSource));
+
+    conn->send_queue_source->conn = conn;
+    conn->send_queue_source->queue_len = 0;
+
+    g_mutex_init (&conn->send_queue_source->mutex);
+
+    conn->send_queue_source->queue =
+        g_async_queue_new_full ((GDestroyNotify) gst_buffer_unref);
+
+    g_source_attach ((GSource *) conn->send_queue_source, priv->loop_context);
+  }
 }
 
 gboolean

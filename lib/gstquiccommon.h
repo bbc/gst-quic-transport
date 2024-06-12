@@ -69,6 +69,9 @@ typedef enum _GstQUICMode {
 	QUICLIB_MODE_SERVER
 } GstQUICMode;
 
+#define GST_FLOW_QUIC_BLOCKED GST_FLOW_CUSTOM_ERROR_1
+#define GST_FLOW_QUIC_STREAM_CLOSED GST_FLOW_CUSTOM_ERROR_2
+
 #define QUICLIB_RAW "application/quic"
 #define QUICLIB_BIDI_STREAM_CAP "application/quic+stream+bidi"
 #define QUICLIB_UNI_STREAM_CAP "application/quic+stream+uni"
@@ -132,7 +135,7 @@ struct _GstQuicLibCommonUserInterface {
       GstQuicLibTransportContext *ctx, GstBuffer *buf);
 
   void (*datagram_ackd) (GstQuicLibCommonUser *self,
-      GstQuicLibTransportContext *ctx, guint64 datagram_ticket);
+      GstQuicLibTransportContext *ctx, GstBuffer *dgram_ackd);
 
   gboolean (*connection_error) (GstQuicLibCommonUser *self,
       GstQuicLibTransportContext *ctx, guint64 error);
@@ -784,9 +787,8 @@ void gst_quiclib_address_list_free (GstQuicLibAddressList *l);
     if (stream_meta) { \
       write_offset += g_snprintf (dbgbuf + write_offset, 10000 - write_offset, \
           "\tGstQuicLibStreamMeta %p:\n\t\tstream_id %ld\n" \
-          "\t\tstream_type: %ld\n\t\toffset: %lu\n\t\tlength: %lu\n" \
-          "\t\tfinal: %s\n", stream_meta, stream_meta->stream_id, \
-          stream_meta->stream_type, stream_meta->offset, stream_meta->length, \
+          "\t\toffset: %lu\n\t\tlength: %lu\n\t\tfinal: %s\n", stream_meta, \
+          stream_meta->stream_id, stream_meta->offset, stream_meta->length, \
           stream_meta->final?"TRUE":"FALSE"); \
     } \
     if (datagram_meta) { \

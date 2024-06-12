@@ -81,7 +81,6 @@ quiclib_stream_meta_init (GstMeta *meta, gpointer params, GstBuffer *buffer)
   GstQuicLibStreamMeta *streammeta = (GstQuicLibStreamMeta *) meta;
 
   streammeta->stream_id = -1;
-  streammeta->stream_type = -1;
   streammeta->offset = 0;
   streammeta->length = 0;
   streammeta->final = FALSE;
@@ -97,7 +96,6 @@ quiclib_stream_meta_transform (GstBuffer *transbuf, GstMeta *meta,
 
   /* Always copy */
   dmeta = gst_buffer_add_quiclib_stream_meta (transbuf, smeta->stream_id,
-      smeta->stream_type,
       smeta->offset, smeta->length,
       smeta->final);
   if (!dmeta)
@@ -134,8 +132,7 @@ gst_quiclib_stream_meta_get_info (void)
 
 GstQuicLibStreamMeta *
 gst_buffer_add_quiclib_stream_meta (GstBuffer *buffer, gint64 stream_id,
-    gint64 stream_type, guint64 offset,
-    guint64 length, gboolean final)
+    guint64 offset, guint64 length, gboolean final)
 {
   GstQuicLibStreamMeta *meta;
 
@@ -152,7 +149,6 @@ gst_buffer_add_quiclib_stream_meta (GstBuffer *buffer, gint64 stream_id,
   g_return_val_if_fail (meta, NULL);
 
   meta->stream_id = stream_id;
-  meta->stream_type = stream_type;
   meta->offset = offset;
   meta->length = length;
   meta->final = final;
