@@ -773,7 +773,6 @@ gst_quic_mux_src_event (GstPad * pad, GstObject * parent, GstEvent * event)
         gst_element_release_request_pad (GST_ELEMENT (quicmux), pad);
       }
 
-      g_mutex_unlock (&quicmux->mutex);
       pthread_mutex_unlock (&quicmux->p_mutex);
 
       return TRUE;
