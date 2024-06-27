@@ -840,6 +840,8 @@ gst_quic_demux_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
   GstQuicLibStreamMeta *stream;
   GstQuicLibDatagramMeta *datagram;
   GstPad *target_pad;
+  gint64 stream_id = -1;
+  gboolean close_src = FALSE;
   GstFlowReturn rv;
 
   g_rec_mutex_lock (&priv->mutex);
@@ -848,6 +850,11 @@ gst_quic_demux_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
 
   stream = gst_buffer_get_quiclib_stream_meta (buf);
   if (stream != NULL) {
+    stream_id = stream->stream_id;
+
+    GST_DEBUG_OBJECT (demux, "Received %lu bytes for stream ID %lu",
+        gst_buffer_get_size (buf), stream->stream_id);
+
     if (!g_hash_table_lookup_extended (priv->stream_srcpads,
         &stream->stream_id, NULL, (gpointer *) &target_pad)) {
       /*
@@ -916,13 +923,16 @@ gst_quic_demux_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
               stream->stream_id);
         }
       }
-
-
+    } else {
+      GST_DEBUG_OBJECT (demux, "Mapped stream %ld to target pad %"
+          GST_PTR_FORMAT, stream_id, target_pad);
     }
   }
 
   datagram = gst_buffer_get_quiclib_datagram_meta (buf);
   if (datagram != NULL) {
+    GST_DEBUG_OBJECT (demux, "Received datagram of size %lu",
+        gst_buffer_get_size (buf));
     if (priv->datagram_srcpad == NULL) {
       GstQuery *query;
       GList *it;
@@ -966,14 +976,16 @@ gst_quic_demux_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
 
   g_rec_mutex_unlock (&priv->mutex);
 
+  close_src = stream && stream->final;
+
   rv = gst_pad_push (target_pad, buf);
 
   GST_DEBUG_OBJECT (demux, "Push result: %d", rv);
 
-  if (stream && stream->final) {
+  if (close_src) {
     GST_DEBUG_OBJECT (demux, "Closing pad %p for stream ID %lu", target_pad,
-        stream->stream_id);
-    quic_demux_close_stream_srcpad (demux, target_pad, stream->stream_id);
+        stream_id);
+    quic_demux_close_stream_srcpad (demux, target_pad, stream_id);
   }
 
   return rv;
