@@ -942,6 +942,7 @@ gst_quic_demux_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
   /*g_assert (target_pad);*/
   if (target_pad == NULL || !gst_pad_is_linked (target_pad)) {
     /* Nothing interested in this stream or datagram  - TODO cancel stream? */
+    g_rec_mutex_unlock (&priv->mutex);
     return GST_FLOW_OK;
   }
 
