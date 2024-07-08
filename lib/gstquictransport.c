@@ -80,6 +80,7 @@ const gchar *
 gst_quiclib_error_as_string (GstQuicLibError err)
 {
   switch (err) {
+    case GST_QUICLIB_ERR_OK: return "OK";
     case GST_QUICLIB_ERR: return "Generic Error";
     case GST_QUICLIB_ERR_STREAM_ID_BLOCKED: return "Stream ID Blocked";
     case GST_QUICLIB_ERR_STREAM_DATA_BLOCKED: return "Stream Data Blocked";
@@ -3059,12 +3060,23 @@ quiclib_ngtcp2_datagram_write (GstQuicLibTransportConnection *conn,
   size_t max_udp_size;
   ngtcp2_ssize nwrite;
   gint paccepted = 0;
-  guint64 datagram_id = conn->datagram_ticket++;
+  guint64 datagram_id = conn->datagram_ticket;
 
   GstBuffer *buffer;
   GstMapInfo map;
 
   gst_quiclib_transport_context_lock (conn);
+
+  /*
+   * Wait until the handshake is completed, as we don't know whether we can send
+   * datagrams until this time!
+   */
+  /* TODO: Do this better! */
+  while (!ngtcp2_conn_get_handshake_completed (conn->quic_conn)) {
+    gst_quiclib_transport_context_unlock (conn);
+    usleep (100000);
+    gst_quiclib_transport_context_lock (conn);
+  }
 
   if (ngtcp2_conn_in_closing_period (conn->quic_conn) ||
       ngtcp2_conn_in_draining_period (conn->quic_conn)) {
@@ -3089,10 +3101,11 @@ quiclib_ngtcp2_datagram_write (GstQuicLibTransportConnection *conn,
   gst_buffer_map (buffer, &map, GST_MAP_WRITE);
 
   GST_LOG_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn),
-      "There are %ld bytes available in the cwnd",
+      "Writing datagram of size %lu into buffer of size %lu with %ld bytes "
+      "available in the cwnd", frame[0].len, map.size,
       ngtcp2_conn_get_cwnd_left (conn->quic_conn));
 
-  nwrite = ngtcp2_conn_writev_datagram (conn->quic_conn, &conn->path.path,
+  nwrite = ngtcp2_conn_writev_datagram (conn->quic_conn, &ps.path,
       &pi, (uint8_t *) map.data, map.size, &paccepted, flags, datagram_id,
       frame, nvec, quiclib_ngtcp2_timestamp ());
 
@@ -3108,30 +3121,40 @@ quiclib_ngtcp2_datagram_write (GstQuicLibTransportConnection *conn,
     g_assert (gsa != NULL);
 
     written = g_socket_send_to (conn->socket->socket, gsa, (gchar *) map.data,
-        map.size, NULL, &err);
+        nwrite, NULL, &err);
+
+    GST_DEBUG_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn),
+        "Sent UDP packet of size %ld bytes containing %lu bytes of payload - "
+        "paccepted is %d", written, frame->len, paccepted);
 
     if (written < 0 && err != NULL) {
       GST_ERROR_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn),
           "g_socket_send_to failed: %s", err->message);
     }
 
-    quiclib_store_datagram_ack_ref (conn, datagram_id, buffer);
+    if (paccepted != 0) {
+      quiclib_store_datagram_ack_ref (conn, datagram_id, buffer);
+      conn->datagram_ticket++;
+    }
 
     g_object_unref (gsa);
   } else {
     switch (nwrite) {
+    case 0:
+      GST_TRACE_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn),
+          "ngtcp2_conn_writev_datagram returned 0. paccepted is %d", paccepted);
+      break;
     case NGTCP2_ERR_WRITE_MORE:
       GST_LOG_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn), "Wrote packet for "
           "datagram %ld, with space remaining in the same packet.",
           datagram_id);
       g_assert (0);
       break;
-    case NGTCP2_ERR_NOMEM:
-    case NGTCP2_ERR_STREAM_NOT_FOUND:
-    case NGTCP2_ERR_STREAM_SHUT_WR:
-    case NGTCP2_ERR_PKT_NUM_EXHAUSTED:
-    case NGTCP2_ERR_INVALID_ARGUMENT:
-    case NGTCP2_ERR_STREAM_DATA_BLOCKED:
+    case NGTCP2_ERR_INVALID_STATE:
+      GST_ERROR_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn),
+          "Remote endpoint does not support DATAGRAMs!");
+      return -1;
+    default:
       GST_LOG_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn),
           "writev_datagram returned %s", ngtcp2_strerror (nwrite));
       return -1;

@@ -550,7 +550,8 @@ gst_quic_mux_request_new_pad (GstElement *element, GstPadTemplate *templ,
    * sending end of an extant bidi stream (and as such, no new stream query is
    * needed).
    */
-  g_assert ((stream_id == G_MAXUINT64 && new_stream_query) ||
+  g_assert ((pad_type == PAD_DATAGRAM) ||
+      (stream_id == G_MAXUINT64 && new_stream_query) ||
       (stream_id != G_MAXUINT64 && new_stream_query == NULL));
 
   /*
@@ -930,6 +931,9 @@ gst_quic_mux_dgram_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
     gst_buffer_add_quiclib_datagram_meta (buf, gst_buffer_get_size (buf));
   }
 
+  GST_DEBUG_OBJECT (quicmux, "Pushing datagram of size %lu",
+      gst_buffer_get_size (buf));
+
   return gst_pad_push (quicmux->srcpad, buf);
 }
 
@@ -944,6 +948,9 @@ gst_quic_mux_src_pad_linked (GstPad * pad, GstObject * parent, GstPad * peer)
   GstQuicMux *quicmux = GST_QUICMUX (parent);
   GstQuery *q;
   GstQuicLibTransportState state;
+  GstSegment segment;
+  GstEvent *segment_event;
+  gboolean ret;
 
   q = gst_query_new_quiclib_conn_state ();
 
@@ -963,6 +970,16 @@ gst_quic_mux_src_pad_linked (GstPad * pad, GstObject * parent, GstPad * peer)
     g_free (statestr);
 
     return GST_PAD_LINK_OK;
+  }
+
+  gst_segment_init (&segment, GST_FORMAT_TIME);
+  segment_event = gst_event_new_segment (&segment);
+
+  GST_TRACE_OBJECT (quicmux, "Sending segment event");
+
+  ret = gst_pad_push_event (pad, segment_event);
+  if (ret == FALSE) {
+    GST_ERROR_OBJECT (quicmux, "Couldn't push segment event!");
   }
 
   GST_DEBUG_OBJECT (quicmux, "Src pad linked, %u stashed streams to open",
@@ -1018,6 +1035,7 @@ gst_quic_mux_request_stashed_streams (GstQuicMux *quicmux)
       } else {
         GST_INFO_OBJECT (quicmux, "Stream ID %ld for stream request \"%s\"",
             stream_id, gst_pad_get_name (pair->stream->sinkpad));
+        pair->stream->stream_id = stream_id;
         /*g_cond_signal (&pair->stream->wait);*/
         pthread_cond_signal (&pair->stream->p_wait);
       }

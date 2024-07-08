@@ -515,6 +515,9 @@ quic_demux_open_stream_srcpad (GstQuicDemux *demux, guint64 stream_id,
 static gboolean
 quic_demux_open_datagram_srcpad (GstQuicDemux *demux, GstElement *target_peer)
 {
+  GstStream *stream;
+  GstSegment *segment;
+  GstEvent *event;
   GstQuicDemuxPrivate *priv = gst_quic_demux_get_instance_private (demux);
 
   g_rec_mutex_lock (&priv->mutex);
@@ -534,6 +537,19 @@ quic_demux_open_datagram_srcpad (GstQuicDemux *demux, GstElement *target_peer)
       return FALSE;
     }
   }
+
+  stream = gst_stream_new ("datagram_stream", NULL, GST_STREAM_TYPE_UNKNOWN,
+      GST_STREAM_FLAG_NONE);
+
+  event = gst_event_new_stream_start ("datagram_stream");
+  gst_event_set_stream (event, stream);
+
+  gst_pad_push_event (priv->datagram_srcpad, event);
+
+  segment = g_new0 (GstSegment, 1);
+  gst_segment_init (segment, GST_FORMAT_TIME);
+  event = gst_event_new_segment (segment);
+  gst_pad_push_event (priv->datagram_srcpad, event);
 
   gst_pad_sticky_events_foreach (priv->sinkpad, forward_sticky_events,
       priv->datagram_srcpad);
@@ -586,6 +602,7 @@ quic_demux_close_datagram_srcpad (GstQuicDemux *demux)
 
   if (priv->datagram_srcpad) {
     gst_element_remove_pad (GST_ELEMENT (demux), priv->datagram_srcpad);
+    priv->datagram_srcpad = NULL;
     rv = TRUE;
   }
 

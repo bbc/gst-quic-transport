@@ -519,6 +519,22 @@ quiclib_common_transport_stream_ackd (GstQuicLibTransportUser *self,
 }
 
 static void
+quiclib_common_transport_datagram_data (GstQuicLibTransportUser *self,
+                         GstQuicLibTransportContext *ctx, GstBuffer *buf)
+{
+  GList *users = (GList *) gst_quiclib_transport_get_app_ctx (ctx);
+
+  for (; users != NULL; users = g_list_next (users)) {
+    GstQuicLibCommonUser *user = (GstQuicLibCommonUser *) users->data;
+    GstQuicLibCommonUserInterface *iface =
+        GST_QUICLIB_COMMON_USER_GET_IFACE (user);
+    if (iface->datagram_data != NULL) {
+      iface->datagram_data (user, ctx, buf);
+    }
+  }
+}
+
+static void
 quiclib_common_transport_datagram_ackd (GstQuicLibTransportUser *self,
     GstQuicLibTransportContext *ctx, GstBuffer *ackd_datagram)
 {
@@ -1351,6 +1367,7 @@ gst_quiclib_common_transport_user_init (gpointer g_iface, gpointer iface_data)
   iface->stream_closed = quiclib_common_transport_stream_closed;
   iface->stream_data = quiclib_common_transport_stream_data;
   iface->stream_ackd = quiclib_common_transport_stream_ackd;
+  iface->datagram_data = quiclib_common_transport_datagram_data;
   iface->datagram_ackd = quiclib_common_transport_datagram_ackd;
   iface->connection_error = quiclib_common_transport_connection_error;
   iface->connection_closed = quiclib_common_transport_connection_closed;

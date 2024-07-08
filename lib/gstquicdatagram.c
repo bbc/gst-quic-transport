@@ -51,7 +51,7 @@ gst_quiclib_datagram_meta_api_get_type (void)
 
     if (g_once_init_enter (&g_type)) {
         const GType type = gst_meta_api_type_register (
-            "GstQuicLibDatagramMeta", tags);
+            "GstQuicLibDatagramMetaAPI", tags);
         g_once_init_leave (&g_type, type);
     }
 
@@ -114,7 +114,7 @@ gst_buffer_add_quiclib_datagram_meta (GstBuffer *buffer, guint64 length)
     GstQuicLibDatagramMeta *meta;
 
     g_return_val_if_fail (GST_IS_BUFFER (buffer), NULL);
-    g_return_val_if_fail (length > MAX_VARINT, NULL);
+    g_return_val_if_fail (length <= MAX_VARINT, NULL);
 
     meta = (GstQuicLibDatagramMeta *) gst_buffer_add_meta (buffer,
             GST_QUICLIB_DATAGRAM_META_INFO, NULL);
