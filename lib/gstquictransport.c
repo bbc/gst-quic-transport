@@ -429,6 +429,7 @@ typedef struct _GstQuicLibTransportParameters {
   guint64 max_streams_bidi;
   guint64 max_streams_uni;
   guint num_cids;
+  gboolean enable_datagrams;
 } GstQuicLibTransportParameters;
 
 struct _GstQuicLibTransportContextPrivate {
@@ -521,6 +522,7 @@ gst_quiclib_transport_context_class_init (
   gst_quiclib_common_install_max_streams_bidi_remote_property (gobject_class);
   gst_quiclib_common_install_max_streams_uni_local_property (gobject_class);
   gst_quiclib_common_install_max_streams_uni_remote_property (gobject_class);
+  gst_quiclib_common_install_enable_datagram_property (gobject_class);
 
   g_object_class_install_property (gobject_class,
       PROP_TRANSPORT_CONTEXT_DEFAULT_NUM_CIDS,
@@ -615,6 +617,9 @@ static void gst_quiclib_transport_context_set_property (GObject * object,
   case PROP_TRANSPORT_CONTEXT_DEFAULT_NUM_CIDS:
     priv->tp_sent.num_cids = g_value_get_uint (value);
     break;
+  case PROP_ENABLE_DATAGRAM:
+    priv->tp_sent.enable_datagrams = g_value_get_boolean (value);
+    break;
   case PROP_MAX_DATA_LOCAL:
   case PROP_MAX_STREAM_DATA_BIDI_LOCAL:
   case PROP_MAX_STREAM_DATA_UNI_LOCAL:
@@ -676,6 +681,9 @@ static void gst_quiclib_transport_context_get_property (GObject * object,
     break;
   case PROP_TRANSPORT_CONTEXT_DEFAULT_NUM_CIDS:
     g_value_set_uint (value, priv->tp_sent.num_cids);
+    break;
+  case PROP_ENABLE_DATAGRAM:
+    g_value_set_boolean (value, priv->tp_sent.enable_datagrams);
     break;
   default:
     G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -1321,6 +1329,7 @@ gst_quiclib_transport_connection_class_init (
       gobject_class);
   gst_quiclib_common_install_peer_addresses_property (gobject_class);
   gst_quiclib_common_install_local_addresses_property (gobject_class);
+  gst_quiclib_common_install_send_datagrams_property (gobject_class);
 }
 
 static void gst_quiclib_transport_connection_set_property (GObject * object,
@@ -1375,6 +1384,7 @@ static void gst_quiclib_transport_connection_set_property (GObject * object,
     case PROP_UNI_STREAMS_REMAINING_LOCAL:
     case PROP_PEER_ADDRESSES:
     case PROP_LOCAL_ADDRESSES:
+    case PROP_SEND_DATAGRAMS:
       g_critical ("Attempted to set read-only parameter: %s", pspec->name);
       /* no break */
     default:
@@ -1455,6 +1465,13 @@ static void gst_quiclib_transport_connection_get_property (GObject * object,
       g_value_set_boxed (value, list);
 
       break;
+    }
+    case PROP_SEND_DATAGRAMS:
+    {
+      const ngtcp2_transport_params *tp =
+          ngtcp2_conn_get_remote_transport_params (conn->quic_conn);
+      
+      g_value_set_boolean (value, tp->max_datagram_frame_size > 0);
     }
     default:
       G_OBJECT_CLASS (gst_quiclib_transport_connection_parent_class)->
@@ -3196,6 +3213,17 @@ gst_quiclib_new_conn_from_server (GstQuicLibServerContext *server)
       server_priv->tp_sent.max_streams_uni;
   conn->transport_params.active_connection_id_limit =
       server_priv->tp_sent.num_cids;
+  if (server_priv->tp_sent.enable_datagrams) {
+    /*
+     * RFC 9221, section 3:
+     *
+     * For most uses of DATAGRAM frames, it is RECOMMENDED to send a value of
+     * 65535 in the max_datagram_frame_size transport parameter to indicate that
+     * this endpoint will accept any DATAGRAM frame that fits inside a QUIC
+     * packet.
+     */
+    conn->transport_params.max_datagram_frame_size = 65535;
+  }
 
   quiclib_print_ngtcp2_transport_params (GST_QUICLIB_TRANSPORT_CONTEXT (conn),
       conn->transport_params);
@@ -3845,6 +3873,7 @@ gst_quiclib_transport_client_connect (GstQuicLibTransportUser *user,
   struct sockaddr *localsa, *remotesa;
   gsize localsa_size, remotesa_size;
   gchar *debug_local_addr, *debug_remote_addr;
+  gboolean enable_datagram;
   GstQuicLibTransportConnection *conn =
       g_object_new (GST_TYPE_QUICLIB_TRANSPORT_CONNECTION, NULL);
   if (conn == NULL) return NULL;
@@ -3953,7 +3982,6 @@ gst_quiclib_transport_client_connect (GstQuicLibTransportUser *user,
    * Retrieve the transport params from the base class
    */
   g_object_get (GST_QUICLIB_TRANSPORT_CONTEXT (conn),
-
       PROP_MAX_STREAM_DATA_BIDI_REMOTE_SHORTNAME,
         &conn->transport_params.initial_max_stream_data_bidi_local,
       PROP_MAX_STREAM_DATA_UNI_REMOTE_SHORTNAME,
@@ -3964,10 +3992,23 @@ gst_quiclib_transport_client_connect (GstQuicLibTransportUser *user,
         &conn->transport_params.initial_max_streams_bidi,
       PROP_MAX_STREAMS_UNI_REMOTE_SHORTNAME,
         &conn->transport_params.initial_max_streams_uni,
+      PROP_ENABLE_DATAGRAM_SHORTNAME, &enable_datagram,
       NULL);
 
   conn->transport_params.initial_max_stream_data_bidi_remote =
       conn->transport_params.initial_max_stream_data_bidi_local;
+
+  if (enable_datagram) {
+    /*
+     * RFC 9221, section 3:
+     *
+     * For most uses of DATAGRAM frames, it is RECOMMENDED to send a value of
+     * 65535 in the max_datagram_frame_size transport parameter to indicate that
+     * this endpoint will accept any DATAGRAM frame that fits inside a QUIC
+     * packet.
+     */
+    conn->transport_params.max_datagram_frame_size = 65535;
+  }
 
   GST_DEBUG_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn),
       "Opening connection with QUIC peer %s with local address %s, DCID %s"

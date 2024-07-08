@@ -687,7 +687,8 @@ gst_quicsrc_quiclib_connect (GstQUICSrc *src)
       src->max_stream_data_bidi_remote_init,
       PROP_MAX_STREAM_DATA_UNI_REMOTE_SHORTNAME,
       src->max_stream_data_uni_remote_init,
-      PROP_MAX_DATA_REMOTE_SHORTNAME, src->max_data_remote_init, NULL);
+      PROP_MAX_DATA_REMOTE_SHORTNAME, src->max_data_remote_init,
+      PROP_ENABLE_DATAGRAM_SHORTNAME, src->enable_datagram, NULL);
 
   return TRUE;
 }

@@ -142,7 +142,8 @@ gst_quicsink_quiclib_listen (GstQuicSink *sink)
       sink->max_stream_data_bidi_remote_init,
       PROP_MAX_STREAM_DATA_UNI_REMOTE_SHORTNAME,
       sink->max_stream_data_uni_remote_init,
-      PROP_MAX_DATA_REMOTE_SHORTNAME, sink->max_data_remote_init, NULL);
+      PROP_MAX_DATA_REMOTE_SHORTNAME, sink->max_data_remote_init,
+      PROP_ENABLE_DATAGRAM_SHORTNAME, sink->enable_datagram, NULL);
 
   return sink->server_ctx != NULL;
 }
@@ -167,7 +168,8 @@ gst_quicsink_quiclib_connect (GstQuicSink *sink)
       sink->max_stream_data_bidi_remote_init,
       PROP_MAX_STREAM_DATA_UNI_REMOTE_SHORTNAME,
       sink->max_stream_data_uni_remote_init,
-      PROP_MAX_DATA_REMOTE_SHORTNAME, sink->max_data_remote_init, NULL);
+      PROP_MAX_DATA_REMOTE_SHORTNAME, sink->max_data_remote_init,
+      PROP_ENABLE_DATAGRAM_SHORTNAME, sink->enable_datagram, NULL);
 
   return sink->conn != NULL;
 }

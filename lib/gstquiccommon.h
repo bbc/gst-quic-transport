@@ -86,6 +86,8 @@ typedef enum _GstQUICMode {
 #define QUICLIB_MAX_STREAMS_UNI_DEFAULT 100
 #define QUICLIB_MAX_STREAM_DATA_DEFAULT 131072
 #define QUICLIB_MAX_DATA_DEFAULT GST_QUICLIB_VARINT_MAX
+#define QUICLIB_ENABLE_DATAGRAM_DEFAULT FALSE
+#define QUICLIB_SEND_DATAGRAMS_DEFAULT FALSE
 
 #define QUICLIB_CONTEXT_MODE "quic-ctx-mode"
 #define QUICLIB_CLIENT_CONNECT "quic-conn-connect"
@@ -312,7 +314,9 @@ void gst_quiclib_address_list_free (GstQuicLibAddressList *l);
   PROP_MAX_STREAM_DATA_UNI_LOCAL, \
   PROP_MAX_STREAM_DATA_UNI_REMOTE, \
   PROP_MAX_DATA_LOCAL, \
-  PROP_MAX_DATA_REMOTE
+  PROP_MAX_DATA_REMOTE, \
+  PROP_ENABLE_DATAGRAM, \
+  PROP_SEND_DATAGRAMS
 
 #define PROP_QUIC_ENDPOINT_SERVER_ENUMS \
   PROP_ALPN, \
@@ -360,7 +364,9 @@ void gst_quiclib_address_list_free (GstQuicLibAddressList *l);
   case PROP_MAX_STREAM_DATA_UNI_LOCAL: \
   case PROP_MAX_STREAM_DATA_UNI_REMOTE: \
   case PROP_MAX_DATA_LOCAL: \
-  case PROP_MAX_DATA_REMOTE
+  case PROP_MAX_DATA_REMOTE: \
+  case PROP_ENABLE_DATAGRAM: \
+  case PROP_SEND_DATAGRAMS
 
 #define PROP_QUIC_ENDPOINT_SERVER_ENUM_CASES PROP_PRIVKEY_LOCATION: \
   case PROP_CERT_LOCATION: \
@@ -386,7 +392,9 @@ void gst_quiclib_address_list_free (GstQuicLibAddressList *l);
   guint64 max_streams_uni_remote_init; \
   guint64 max_stream_data_bidi_remote_init; \
   guint64 max_stream_data_uni_remote_init; \
-  guint64 max_data_remote_init;
+  guint64 max_data_remote_init; \
+  gboolean enable_datagram; \
+  gboolean send_datagrams;
 
 #define gst_quiclib_common_init_endpoint_properties(inst) \
   do { \
@@ -401,6 +409,8 @@ void gst_quiclib_address_list_free (GstQuicLibAddressList *l);
     inst->max_stream_data_bidi_remote_init = QUICLIB_MAX_STREAM_DATA_DEFAULT; \
     inst->max_stream_data_uni_remote_init = QUICLIB_MAX_STREAM_DATA_DEFAULT; \
     inst->max_data_remote_init = QUICLIB_MAX_DATA_DEFAULT; \
+    inst->enable_datagram = QUICLIB_ENABLE_DATAGRAM_DEFAULT; \
+    inst->send_datagrams = QUICLIB_SEND_DATAGRAMS_DEFAULT; \
   } while (0);
 
 #define gst_quiclib_common_install_endpoint_properties(klass) \
@@ -427,6 +437,8 @@ void gst_quiclib_address_list_free (GstQuicLibAddressList *l);
     gst_quiclib_common_install_max_stream_data_uni_remote_property (klass); \
     gst_quiclib_common_install_max_data_local_property (klass); \
     gst_quiclib_common_install_max_data_remote_property (klass); \
+    gst_quiclib_common_install_enable_datagram_property (klass); \
+    gst_quiclib_common_install_send_datagrams_property (klass); \
   } while (0); \
 
 #define PROP_LOCATION_SHORT "location"
@@ -629,6 +641,23 @@ void gst_quiclib_address_list_free (GstQuicLibAddressList *l);
             0, QUICLIB_VARINT_MAX, QUICLIB_MAX_STREAM_DATA_DEFAULT, \
             G_PARAM_READWRITE));
 
+#define PROP_ENABLE_DATAGRAM_SHORTNAME "enable-datagrams"
+#define gst_quiclib_common_install_enable_datagram_property(klass) \
+    g_object_class_install_property (klass, PROP_ENABLE_DATAGRAM, \
+        g_param_spec_boolean (PROP_ENABLE_DATAGRAM_SHORTNAME, \
+            "Enable QUIC DATAGRAM extension", \
+            "Allow the reception of QUIC DATAGRAM packets. The remote " \
+            "endpoint controls whether this endpoint can send DATAGRAMS.", \
+            QUICLIB_ENABLE_DATAGRAM_DEFAULT, G_PARAM_READWRITE));
+
+#define PROP_SEND_DATAGRAMS_SHORTNAME "can-send-datagrams"
+#define gst_quiclib_common_install_send_datagrams_property(klass) \
+    g_object_class_install_property (klass, PROP_SEND_DATAGRAMS, \
+        g_param_spec_boolean (PROP_SEND_DATAGRAMS_SHORTNAME, \
+            "Can send QUIC DATAGRAMs", \
+            "Connection peer has expressed support for receiving QUIC " \
+            "DATAGRAMs", QUICLIB_SEND_DATAGRAMS_DEFAULT, G_PARAM_READABLE));
+
 #define gst_quiclib_common_set_endpoint_property_checked( \
     obj, tctx, pspec, prop_id, value) \
   do { \
@@ -691,6 +720,9 @@ void gst_quiclib_address_list_free (GstQuicLibAddressList *l);
       case PROP_MAX_DATA_REMOTE: \
         obj->max_data_remote_init = g_value_get_uint64 (value); \
         break; \
+      case PROP_ENABLE_DATAGRAM: \
+        obj->enable_datagram = g_value_get_boolean (value); \
+        break; \
       /* Read-only properties start */ \
       case PROP_MAX_STREAMS_BIDI_LOCAL: \
       case PROP_BIDI_STREAMS_REMAINING_LOCAL: \
@@ -699,6 +731,7 @@ void gst_quiclib_address_list_free (GstQuicLibAddressList *l);
       case PROP_MAX_STREAM_DATA_BIDI_LOCAL: \
       case PROP_MAX_STREAM_DATA_UNI_LOCAL: \
       case PROP_MAX_DATA_LOCAL: \
+      case PROP_SEND_DATAGRAMS: \
         g_critical ("Cannot set local transport parameters, they are read-only!"); \
         set = FALSE; \
         break; \
@@ -756,6 +789,9 @@ void gst_quiclib_address_list_free (GstQuicLibAddressList *l);
           break; \
         case PROP_MAX_DATA_REMOTE: \
           g_value_set_uint64 (value, obj->max_data_remote_init); \
+          break; \
+        case PROP_ENABLE_DATAGRAM: \
+          g_value_set_boolean (value, obj->enable_datagram); \
           break; \
         default: \
           GST_DEBUG_OBJECT (obj, "Property %s unavailable when there is " \
