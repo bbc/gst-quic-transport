@@ -2720,7 +2720,7 @@ quiclib_ngtcp2_remove_connection_id (ngtcp2_conn *quic_conn,
         memcmp (((ngtcp2_cid *) it->data)->data, cid->data, cid->datalen) == 0)
     {
       g_free (it->data);
-      conn->cids = g_list_remove (conn->cids, it);
+      conn->cids = g_list_delete_link (conn->cids, it);
     }
   }
 
