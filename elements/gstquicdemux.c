@@ -435,6 +435,16 @@ quic_demux_open_stream_srcpad (GstQuicDemux *demux, guint64 stream_id,
   gst_pad_set_caps (pad, caps);
   gst_pad_set_query_function (pad, gst_quic_demux_query);
 
+  stream_id_ptr = g_new (gint64, 1);
+  *stream_id_ptr = stream_id;
+
+  GST_DEBUG_OBJECT (demux, "Adding stream context to hash table for stream ID "
+      "%lu with pad %p / %" GST_PTR_FORMAT, stream_id, pad, pad);
+
+  g_rec_mutex_lock (&priv->mutex);
+  g_hash_table_insert (priv->stream_srcpads, stream_id_ptr, (gpointer) pad);
+  g_rec_mutex_unlock (&priv->mutex);
+
   gst_element_add_pad (GST_ELEMENT (demux), pad);
 
   if (!gst_pad_is_linked (pad) && target_peer != NULL) {
@@ -476,6 +486,9 @@ quic_demux_open_stream_srcpad (GstQuicDemux *demux, guint64 stream_id,
       gst_caps_unref (caps);
       gst_object_unref (pad);
       gst_object_unref (peer_pad);
+      g_rec_mutex_lock (&priv->mutex);
+      g_hash_table_remove (priv->stream_srcpads, stream_id_ptr);
+      g_rec_mutex_unlock (&priv->mutex);
       return NULL;
     }
 
@@ -495,16 +508,6 @@ quic_demux_open_stream_srcpad (GstQuicDemux *demux, guint64 stream_id,
   gst_pad_push_event (pad, event);
 
   gst_pad_sticky_events_foreach (priv->sinkpad, forward_sticky_events, pad);
-
-  stream_id_ptr = g_new (gint64, 1);
-  *stream_id_ptr = stream_id;
-
-  GST_DEBUG_OBJECT (demux, "Adding stream context to hash table for stream ID "
-      "%lu with pad %p / %" GST_PTR_FORMAT, stream_id, pad, pad);
-
-  g_rec_mutex_lock (&priv->mutex);
-  g_hash_table_insert (priv->stream_srcpads, stream_id_ptr, (gpointer) pad);
-  g_rec_mutex_unlock (&priv->mutex);
 
   return pad;
 }
