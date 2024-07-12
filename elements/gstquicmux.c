@@ -266,6 +266,8 @@ gst_quic_mux_init (GstQuicMux * quicmux)
   pthread_mutexattr_init (&m_attr);
   pthread_mutexattr_settype (&m_attr, PTHREAD_MUTEX_RECURSIVE);
   pthread_mutex_init (&quicmux->p_mutex, &m_attr);
+
+  quicmux->start_stream = TRUE;
 }
 
 static void
@@ -684,9 +686,13 @@ gst_quic_mux_sink_event (GstPad * pad, GstObject * parent,
       ret = gst_pad_event_default (pad, parent, event);
       break;
     }
+    case GST_EVENT_STREAM_START:
     case GST_EVENT_SEGMENT:
     {
-      ret = gst_pad_push_event (quicmux->srcpad, event);
+      /*
+       * Don't push segments to quicsink, as we create our own to have sync
+       * for all streams
+       */
       break;
     }
     default:
@@ -817,6 +823,67 @@ quic_mux_stream_can_send (GstQuicMux *quicmux, GstQuicMuxStreamObject *stream)
   return 1;
 }
 
+static gboolean
+_quic_mux_handle_buffer_segments (GstQuicMux *quicmux, GstBuffer *buf,
+    GstPad *sink_pad)
+{
+  GstEvent *sticky_event;
+
+  if (quicmux->start_stream) {
+    GstEvent *stream_start_event;
+    GstSegment segment;
+    GstEvent *segment_event;
+    gboolean ret;
+
+    stream_start_event = gst_event_new_stream_start ("");
+    ret = gst_pad_push_event (quicmux->srcpad, stream_start_event);
+    if (ret == FALSE) {
+      GST_ERROR_OBJECT (quicmux, "Couldn't push stream start event");
+    }
+
+    gst_segment_init (&segment, GST_FORMAT_TIME);
+    segment_event = gst_event_new_segment (&segment);
+
+    GST_TRACE_OBJECT (quicmux, "Sending segment event");
+
+    ret = gst_pad_push_event (quicmux->srcpad, segment_event);
+    if (ret == FALSE) {
+      GST_ERROR_OBJECT (quicmux, "Couldn't push segment event!");
+    }
+
+    quicmux->start_stream = FALSE;
+  }
+
+  sticky_event = gst_pad_get_sticky_event (sink_pad, GST_EVENT_SEGMENT, 0);
+  
+  if (sticky_event) {
+    const GstSegment *segment = NULL;
+
+    gst_event_parse_segment (sticky_event, &segment);
+
+    if (segment == NULL) {
+      GST_ERROR_OBJECT (quicmux, "Couldn't parse segment event!");
+    } else {
+      GstClockTime new_pts = gst_segment_to_running_time (segment,
+          GST_FORMAT_TIME, GST_BUFFER_PTS (buf));
+      GstClockTime new_dts = gst_segment_to_running_time (segment,
+          GST_FORMAT_TIME, GST_BUFFER_DTS (buf));
+
+      GST_TRACE_OBJECT (quicmux, "Adjusting segment running time: PTS %"
+          GST_TIME_FORMAT "->%" GST_TIME_FORMAT ", DTS %" GST_TIME_FORMAT "->%"
+          GST_TIME_FORMAT, GST_TIME_ARGS (GST_BUFFER_PTS (buf)),
+          GST_TIME_ARGS (new_pts), GST_TIME_ARGS (GST_BUFFER_DTS (buf)),
+          GST_TIME_ARGS (new_dts));
+
+      GST_BUFFER_DTS (buf) = new_dts;
+      GST_BUFFER_PTS (buf) = new_pts;
+      
+      return TRUE;
+    }
+  }
+
+  return FALSE;
+}
 /**
  * Implements GstPadChainFunction for the sink pads
  */
@@ -898,6 +965,10 @@ gst_quic_mux_stream_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
         "quicmux-chain"/*-unlinked-error"*/);
   }
 
+  if (!_quic_mux_handle_buffer_segments (quicmux, buf, pad)) {
+    GST_ERROR_OBJECT (quicmux, "Error adjusting buffer to running time");
+  }
+
   gst_object_ref (G_OBJECT (pad));
 
   rv = gst_pad_push (quicmux->srcpad, buf);
@@ -934,6 +1005,10 @@ gst_quic_mux_dgram_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
   GST_DEBUG_OBJECT (quicmux, "Pushing datagram of size %lu",
       gst_buffer_get_size (buf));
 
+  if (!_quic_mux_handle_buffer_segments (quicmux, buf, pad)) {
+    GST_ERROR_OBJECT (quicmux, "Error adjusting buffer to running time");
+  }
+
   return gst_pad_push (quicmux->srcpad, buf);
 }
 
@@ -948,9 +1023,6 @@ gst_quic_mux_src_pad_linked (GstPad * pad, GstObject * parent, GstPad * peer)
   GstQuicMux *quicmux = GST_QUICMUX (parent);
   GstQuery *q;
   GstQuicLibTransportState state;
-  GstSegment segment;
-  GstEvent *segment_event;
-  gboolean ret;
 
   q = gst_query_new_quiclib_conn_state ();
 
@@ -970,16 +1042,6 @@ gst_quic_mux_src_pad_linked (GstPad * pad, GstObject * parent, GstPad * peer)
     g_free (statestr);
 
     return GST_PAD_LINK_OK;
-  }
-
-  gst_segment_init (&segment, GST_FORMAT_TIME);
-  segment_event = gst_event_new_segment (&segment);
-
-  GST_TRACE_OBJECT (quicmux, "Sending segment event");
-
-  ret = gst_pad_push_event (pad, segment_event);
-  if (ret == FALSE) {
-    GST_ERROR_OBJECT (quicmux, "Couldn't push segment event!");
   }
 
   GST_DEBUG_OBJECT (quicmux, "Src pad linked, %u stashed streams to open",

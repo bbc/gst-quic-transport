@@ -95,6 +95,8 @@ struct _GstQuicMux
   GHashTable *id_to_stream;
 
   GList *stream_open_requests;
+
+  gboolean start_stream;
 };
 
 G_END_DECLS
