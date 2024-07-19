@@ -650,8 +650,6 @@ gst_quic_demux_sink_event (GstPad * pad, GstObject * parent,
         gst_element_send_event (GST_ELEMENT (it->data), event);
       }
 
-      gst_event_unref (event);
-
       ret = gst_pad_event_default (pad, parent, event);
       break;
     }
