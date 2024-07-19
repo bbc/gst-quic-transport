@@ -3083,7 +3083,7 @@ quiclib_ngtcp2_datagram_write (GstQuicLibTransportConnection *conn,
     GST_ERROR_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn),
         "Connection closed");
     gst_quiclib_transport_context_unlock (conn);
-    return -1;
+    return GST_QUICLIB_ERR_CONN_CLOSED;
   }
   ngtcp2_path_storage_zero (&ps);
   ngtcp2_path_storage_zero (&prev_ps);
@@ -3095,7 +3095,7 @@ quiclib_ngtcp2_datagram_write (GstQuicLibTransportConnection *conn,
     GST_ERROR_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn),
         "Couldn't allocate GstBuffer");
     gst_quiclib_transport_context_unlock (conn);
-    return -1;
+    return GST_QUICLIB_ERR_OOM;
   }
 
   gst_buffer_map (buffer, &map, GST_MAP_WRITE);
@@ -3153,11 +3153,11 @@ quiclib_ngtcp2_datagram_write (GstQuicLibTransportConnection *conn,
     case NGTCP2_ERR_INVALID_STATE:
       GST_ERROR_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn),
           "Remote endpoint does not support DATAGRAMs!");
-      return -1;
+      return GST_QUICLIB_ERR_EXTENSION_NOT_SUPPORTED;
     default:
       GST_LOG_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn),
           "writev_datagram returned %s", ngtcp2_strerror (nwrite));
-      return -1;
+      return GST_QUICLIB_ERR;
     }
   }
 
@@ -4984,7 +4984,7 @@ gst_quiclib_transport_send_datagram (GstQuicLibTransportConnection *conn,
 
   quiclib_buffer_unmap (&maps);
 
-  if (bytes_written) *bytes_written = _bytes_written;
+  if (_bytes_written > 0 && bytes_written) *bytes_written = _bytes_written;
   
   return (bytes_written >= 0)?(GST_QUICLIB_ERR_OK):(
       (GstQuicLibError) bytes_written);

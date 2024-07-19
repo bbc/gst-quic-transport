@@ -569,22 +569,28 @@ gst_quicsink_render (GstBaseSink * sink, GstBuffer * buffer)
         "Send buffer returned %d (%s) with %lu bytes sent", err,
         gst_quiclib_error_as_string (err), b_sent);
         
-    switch (err) {
-      case GST_QUICLIB_ERR_OK:
-        break;
-      case GST_QUICLIB_ERR:
-      case GST_QUICLIB_ERR_STREAM_ID_BLOCKED:
-      case GST_QUICLIB_ERR_STREAM_DATA_BLOCKED:
-        return GST_FLOW_ERROR;
-      case GST_QUICLIB_ERR_CONN_DATA_BLOCKED:
-        return GST_FLOW_QUIC_BLOCKED;
-      case GST_QUICLIB_ERR_STREAM_CLOSED:
-        return GST_FLOW_QUIC_STREAM_CLOSED;
-      case GST_QUICLIB_ERR_PACKET_NUM_EXHAUSTED:
-        GST_ERROR_OBJECT (quicsink, "QUIC connection has exhausted its packet "
-            "number space, this connection is done!");
-        return GST_FLOW_EOS;
-    }    
+    if (err != GST_QUICLIB_ERR_OK) {
+      switch (err) {
+        case GST_QUICLIB_ERR:
+        case GST_QUICLIB_ERR_STREAM_ID_BLOCKED:
+        case GST_QUICLIB_ERR_STREAM_DATA_BLOCKED:
+          return GST_FLOW_ERROR;
+        case GST_QUICLIB_ERR_CONN_DATA_BLOCKED:
+          return GST_FLOW_QUIC_BLOCKED;
+        case GST_QUICLIB_ERR_STREAM_CLOSED:
+          return GST_FLOW_QUIC_STREAM_CLOSED;
+        case GST_QUICLIB_ERR_PACKET_NUM_EXHAUSTED:
+          GST_ERROR_OBJECT (quicsink, "QUIC connection has exhausted its "
+              "packet number space, this connection is done!");
+          return GST_FLOW_EOS;
+        case GST_QUICLIB_ERR_EXTENSION_NOT_SUPPORTED:
+          GST_ERROR_OBJECT (quicsink, "Required extension to send buffer not supported");
+          return GST_FLOW_QUIC_EXTENSION_NOT_SUPPORTED;
+        default:
+          GST_ERROR_OBJECT (quicsink,
+              "QuicLib returned unknown return error code %d", err);
+      }
+    }
     
     sent += (gsize) b_sent;
     GST_TRACE_OBJECT (quicsink, "Sent %ld bytes of %lu, %lu sent total", b_sent,
