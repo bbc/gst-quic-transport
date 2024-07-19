@@ -265,6 +265,9 @@ quicsrc_user_stream_closed (GstQuicLibCommonUser *self,
 {
   GstQUICSrc *src = GST_QUICSRC (self);
   GList *it;
+  GstQuicLibStreamMeta *last_meta = NULL;
+
+  GST_TRACE_OBJECT (src, "Stream %lu has closed", stream_id);
 
   g_mutex_lock (&src->mutex);
 
@@ -283,19 +286,24 @@ quicsrc_user_stream_closed (GstQuicLibCommonUser *self,
     g_warn_if_fail (meta);
 
     if (meta && meta->stream_id == (gint64) stream_id) {
-      GST_DEBUG_OBJECT (src, "Setting final flag on buffer %p for stream %lu",
-          it->data, stream_id);
-      meta->final = TRUE;
-      g_mutex_unlock (&src->mutex);
-      return;
+      last_meta = meta;
     }
   }
 
+  if (last_meta) {
+    GST_DEBUG_OBJECT (src, "Setting final flag on last buffer for stream %lu",
+        stream_id);
+    last_meta->final = TRUE;
+  } else {
+    GST_DEBUG_OBJECT (src, "Sending stream closed signal and event for stream "
+        "%lu", stream_id);
+
+    gst_quiclib_stream_closed_signal_emit (src, stream_id);
+
+    gst_quiclib_new_stream_closed_event (GST_BASE_SRC (src)->srcpad, stream_id);
+  }
+
   g_mutex_unlock (&src->mutex);
-
-  gst_quiclib_stream_closed_signal_emit (src, stream_id);
-
-  gst_quiclib_new_stream_closed_event (GST_BASE_SRC (src)->srcpad, stream_id);
 }
 
 void
@@ -368,8 +376,12 @@ quicsrc_user_connection_closed (GstQuicLibCommonUser *self,
 
   gst_quiclib_conn_closed_signal_emit (src, G_SOCKET_ADDRESS (remote));
 
-  gst_quiclib_unref (GST_QUICLIB_TRANSPORT_CONTEXT (src->conn),
-      GST_QUICLIB_COMMON_USER (src));
+  g_cond_signal (&src->signal);
+
+  if (src->conn) {
+    gst_quiclib_unref (GST_QUICLIB_TRANSPORT_CONTEXT (src->conn),
+        GST_QUICLIB_COMMON_USER (src));
+  }
 }
 
 void
@@ -513,6 +525,7 @@ gst_quicsrc_change_state (GstElement *elem, GstStateChange t)
     if (gst_quicsrc_quiclib_disconnect (src) == FALSE) {
       return GST_STATE_CHANGE_FAILURE;
     }
+    g_cond_signal (&src->signal);
     return GST_STATE_CHANGE_SUCCESS;
   }
 
@@ -638,8 +651,21 @@ gst_quicsrc_create (GstPushSrc *psrc, GstBuffer **outbuf)
   g_mutex_lock (&src->mutex);
 
   if (src->frames == NULL) {
+    GstState current, pending;
+    GstStateChangeReturn scr;
+
     GST_DEBUG_OBJECT (src, "Waiting for frames from QUICLIB...");
     g_cond_wait (&src->signal, &src->mutex);
+
+    scr = gst_element_get_state (GST_ELEMENT (src), &current, &pending, 0);
+    if (current != GST_STATE_PLAYING) {
+      return GST_FLOW_OK;
+    }
+  }
+
+  if (GST_PAD_IS_EOS (GST_BASE_SRC (src)->srcpad)) {
+    GST_DEBUG_OBJECT (src, "Src pad is EOS");
+    return GST_FLOW_EOS;
   }
 
   *outbuf = GST_BUFFER (src->frames->data);
@@ -697,10 +723,8 @@ static gboolean
 gst_quicsrc_quiclib_disconnect (GstQUICSrc *src)
 {
   if (src->conn != NULL) {
-    gst_quiclib_unref (GST_QUICLIB_TRANSPORT_CONTEXT (src->conn),
-        GST_QUICLIB_COMMON_USER (src));
-    src->conn = NULL;
-    return TRUE;
+    return gst_quiclib_transport_disconnect (src->conn, FALSE,
+        QUICLIB_CLOSE_NO_ERROR) == 0;
   }
   return FALSE;
 }
