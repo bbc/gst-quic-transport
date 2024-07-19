@@ -2288,6 +2288,9 @@ quiclib_ngtcp2_handshake_completed (ngtcp2_conn *quic_conn, void *user_data)
     }
   }
 
+  gst_quiclib_transport_context_set_state (
+        GST_QUICLIB_TRANSPORT_CONTEXT (conn), QUIC_STATE_OPEN);
+
   if (iface->handshake_complete != NULL) {
     GInetSocketAddress *sa = (GInetSocketAddress *)
 	          g_socket_address_new_from_native (conn->path.path.remote.addr,
@@ -2302,9 +2305,6 @@ quiclib_ngtcp2_handshake_completed (ngtcp2_conn *quic_conn, void *user_data)
       return -1;
     }
   }
-
-  gst_quiclib_transport_context_set_state (GST_QUICLIB_TRANSPORT_CONTEXT (conn),
-        QUIC_STATE_OPEN);
 
   return 0;
 }
