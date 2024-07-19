@@ -931,6 +931,12 @@ gst_quiclib_transport_context_kill_thread (GstQuicLibTransportContext *ctx)
 
   g_main_loop_unref (p->loop);
 
+  if (g_thread_self () == p->loop_thread) {
+    g_thread_exit (NULL);
+  } else {
+    g_thread_join (p->loop_thread);
+  }
+
   g_thread_unref (p->loop_thread);
 
   g_main_context_unref (p->loop_context);
@@ -1574,6 +1580,11 @@ gst_quiclib_transport_connection_init (GstQuicLibTransportConnection *self)
 static void
 gst_quiclib_transport_connection_finalise (GstQuicLibTransportConnection *self)
 {
+  GST_DEBUG_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (self), "Finalizing");
+
+  gst_quiclib_transport_context_kill_thread (
+      GST_QUICLIB_TRANSPORT_CONTEXT (self));
+
   if (self->quic_conn) {
     gst_quiclib_transport_context_lock (self);
     if (!ngtcp2_conn_in_closing_period (self->quic_conn) &&
@@ -1613,9 +1624,6 @@ gst_quiclib_transport_connection_finalise (GstQuicLibTransportConnection *self)
 
     g_free (self->socket);
     self->socket = NULL;
-
-    gst_quiclib_transport_context_kill_thread (
-        GST_QUICLIB_TRANSPORT_CONTEXT (self));
   }
 
   if (self->cids) {
@@ -1642,6 +1650,8 @@ gst_quiclib_transport_connection_finalise (GstQuicLibTransportConnection *self)
     SSL_CTX_free (self->ssl_ctx);
     self->ssl_ctx = NULL;
   }
+
+  GST_DEBUG_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (self), "Done finalizing");
 }
 
 struct GstQuicLibConnectionID {
