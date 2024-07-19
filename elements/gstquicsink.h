@@ -68,8 +68,8 @@ struct _GstQuicSink
   GstQuicLibServerContext *server_ctx;
   GstQuicLibTransportConnection *conn;
 
-  GMutex mutex;
-  GCond signal;
+  GRecMutex mutex;
+  GCond ctx_change;
 
   GList *frames;
 
