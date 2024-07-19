@@ -4324,6 +4324,10 @@ gst_quiclib_transport_disconnect (GstQuicLibTransportConnection *conn,
     ngtcp2_ccerr_set_transport_error (&conn->last_error, reason, NULL, 0);
   }
 
+  if (conn->quic_conn == NULL) {
+    return 0;
+  }
+
   gst_quiclib_transport_context_set_state (GST_QUICLIB_TRANSPORT_CONTEXT (conn),
       QUIC_STATE_HALF_CLOSED);
 
@@ -4332,15 +4336,21 @@ gst_quiclib_transport_disconnect (GstQuicLibTransportConnection *conn,
       &conn->path.path, &pi, buf, NGTCP2_MAX_UDP_PAYLOAD_SIZE,
       &conn->last_error, quiclib_ngtcp2_timestamp ());
 
-  if (written <= 0) {
+  if (written < 0) {
     GST_ERROR_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn),
         "Couldn't write connection close packet: %s",
         ngtcp2_strerror ((int) written));
+    gst_quiclib_transport_context_unlock (conn);
     return -1;
   }
 
-  written = ngtcp2_conn_write_pkt (conn->quic_conn, &conn->path.path, &pi,
-      buf, (size_t) written, quiclib_ngtcp2_timestamp ());
+  /*
+   * Can return 0 if the connection was already closed
+   */
+  if (written > 0) {
+    written = ngtcp2_conn_write_pkt (conn->quic_conn, &conn->path.path, &pi,
+        buf, (size_t) written, quiclib_ngtcp2_timestamp ());
+  }
 
   if (!ngtcp2_conn_in_closing_period (conn->quic_conn) &&
       !ngtcp2_conn_in_draining_period (conn->quic_conn))
