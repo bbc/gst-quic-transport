@@ -1244,56 +1244,6 @@ gst_quic_mux_src_query (GstPad *pad, GstObject *parent, GstQuery *query)
       /*g_assert (0);*/
     }
     break;
-  case GST_QUERY_CAPS:
-  {
-    GstCaps *query_caps, *template_caps, *target_caps;
-    GstStructure *capsstruct;
-    GstQuicMuxStreamObject *stream;
-
-
-    gst_query_parse_caps (query, &query_caps);
-    template_caps = gst_pad_template_get_caps (
-        gst_element_get_pad_template (GST_ELEMENT (parent), "src"));
-
-    /*g_return_val_if_fail (query_caps != NULL && sink_caps != NULL, FALSE);*/
-    if (query_caps) {
-      target_caps = gst_caps_intersect (query_caps, template_caps);
-    } else {
-      target_caps = gst_caps_copy (template_caps);
-    }
-
-    g_assert (gst_caps_is_writable (target_caps));
-    capsstruct = gst_caps_get_structure (target_caps, 0);
-
-    /*                  v
-     * application/quic+stream
-     *                  ^
-     */
-    if (gst_structure_get_name (capsstruct)[17] == 's') {
-      gchar *capsdebug;
-
-      stream = quic_mux_get_stream_from_pad (mux, pad);
-      g_assert (stream);
-
-      gst_structure_set (capsstruct, QUICLIB_STREAMID_KEY, G_TYPE_UINT64,
-          stream->stream_id, NULL);
-
-      capsdebug = gst_caps_to_string (target_caps);
-      GST_DEBUG_OBJECT (mux, "SRC pad caps for stream ID %lu: %s",
-          stream->stream_id, capsdebug);
-      g_free (capsdebug);
-    } else {
-      gchar *capsdebug = gst_caps_to_string (target_caps);
-      GST_DEBUG_OBJECT (mux, "SRC pad caps for datagram: %s", capsdebug);
-      g_free (capsdebug);
-    }
-
-    gst_query_set_caps_result (query, target_caps);
-
-    gst_caps_unref (template_caps);
-
-    break;
-  }
   default:
     rv = gst_pad_query_default (pad, parent, query);
     return rv;
