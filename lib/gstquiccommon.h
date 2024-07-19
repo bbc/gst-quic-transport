@@ -71,6 +71,7 @@ typedef enum _GstQUICMode {
 
 #define GST_FLOW_QUIC_BLOCKED GST_FLOW_CUSTOM_ERROR_1
 #define GST_FLOW_QUIC_STREAM_CLOSED GST_FLOW_CUSTOM_ERROR_2
+#define GST_FLOW_QUIC_EXTENSION_NOT_SUPPORTED -103
 
 #define QUICLIB_RAW "application/quic"
 #define QUICLIB_BIDI_STREAM_CAP "application/quic+stream+bidi"
