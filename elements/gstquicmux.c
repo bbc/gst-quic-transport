@@ -379,7 +379,7 @@ quic_mux_close_stream_from_pad (GstQuicMux *quicmux, GstPad *pad,
   /*g_mutex_unlock (&quicmux->mutex);*/
   pthread_mutex_unlock (&quicmux->p_mutex);
 
-  /*if (stream_id < QUICLIB_VARINT_MAX) {
+  if (stream_id < QUICLIB_VARINT_MAX) {
     GstQuery *closeq = gst_query_cancel_quiclib_stream (stream_id, reason);
     if (!gst_pad_peer_query (quicmux->srcpad, closeq)) {
       GST_ERROR_OBJECT (quicmux, "Close stream query failed!");
@@ -389,8 +389,7 @@ quic_mux_close_stream_from_pad (GstQuicMux *quicmux, GstPad *pad,
     return TRUE;
   }
 
-  return FALSE;*/
-  return TRUE;
+  return FALSE;
 }
 
 void
