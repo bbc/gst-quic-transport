@@ -116,23 +116,14 @@ quiclib_all_headers = [
 
 install_headers (quiclib_all_headers, subdir : meson.project_name())
 
-#
-# TODO: Separate these out into their own pkg-config files?
-#
+
 pkg_mod = import ('pkgconfig')
-#pkg_mod.generate(
-#  name : meson.project_name(),
-#  filebase : meson.project_name(),
-#  description: 'QUIC Transport library for GStreamer',
-#  subdirs : meson.project_name(),
-#  libraries : [quiclib, quicutils, quicstream, quicdatagram]
-#)
 
 pkg_mod.generate(
   name : quiclib.name(),
   filebase : quiclib.name(),
   description: 'QUIC Transport library for GStreamer',
-  subdirs : quiclib.name(),
+  subdirs : 'gst-quic-transport',
   libraries : quiclib
 )
 
@@ -140,7 +131,7 @@ pkg_mod.generate(
   name : quicutils.name(),
   filebase : quicutils.name(),
   description : 'QUIC Utility library for GStreamer',
-  subdirs : quicutils.name(),
+  subdirs : 'gst-quic-transport',
   libraries : quicutils
 )
 
@@ -148,7 +139,7 @@ pkg_mod.generate(
   name : quicstream.name(),
   filebase : quicstream.name(),
   description : 'QUIC Stream functions for GStreamer',
-  subdirs : quicstream.name(),
+  subdirs : 'gst-quic-transport',
   libraries : quicstream
 )
 
@@ -156,6 +147,6 @@ pkg_mod.generate(
   name : quicdatagram.name(),
   filebase : quicdatagram.name(),
   description : 'QUIC Datagram functions for GStreamer',
-  subdirs : quicdatagram.name(),
+  subdirs : 'gst-quic-transport',
   libraries : quicdatagram
 )
