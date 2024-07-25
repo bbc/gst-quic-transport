@@ -132,7 +132,7 @@ gst_quicsink_quiclib_listen (GstQuicSink *sink)
 
   GST_TRACE_OBJECT (sink, "Opening listening port on %s", sink->location);
 
-  sink->server_ctx = gst_quiclib_listen (GST_QUICLIB_COMMON_USER (sink),
+  sink->server_ctx = gst_quiclib_get_server (GST_QUICLIB_COMMON_USER (sink),
       sink->location, sink->alpn, sink->privkey_location, sink->cert_location,
       sink->sni);
 
@@ -146,6 +146,16 @@ gst_quicsink_quiclib_listen (GstQuicSink *sink)
       sink->max_stream_data_uni_remote_init,
       PROP_MAX_DATA_REMOTE_SHORTNAME, sink->max_data_remote_init,
       PROP_ENABLE_DATAGRAM_SHORTNAME, sink->enable_datagram, NULL);
+
+  if (gst_quiclib_transport_get_state (
+        GST_QUICLIB_TRANSPORT_CONTEXT (sink->server_ctx)) == QUIC_STATE_NONE) {
+    if (!gst_quiclib_transport_server_listen (sink->server_ctx)) {
+      GST_ERROR_OBJECT (sink, "Couldn't listen on server address %s",
+          sink->location);
+      gst_quiclib_unref (GST_QUICLIB_TRANSPORT_CONTEXT (sink->conn),
+          GST_QUICLIB_COMMON_USER (sink));
+    }
+  }
 
   g_mutex_unlock (&sink->mutex);
 
@@ -163,7 +173,7 @@ gst_quicsink_quiclib_connect (GstQuicSink *sink)
 
   GST_TRACE_OBJECT (sink, "Connecting to %s with ALPN %s", sink->location,
       sink->alpn);
-  sink->conn = gst_quiclib_connect (GST_QUICLIB_COMMON_USER (sink),
+  sink->conn = gst_quiclib_get_client (GST_QUICLIB_COMMON_USER (sink),
       sink->location, sink->alpn);
 
   g_object_set (sink->conn,
@@ -176,6 +186,16 @@ gst_quicsink_quiclib_connect (GstQuicSink *sink)
       sink->max_stream_data_uni_remote_init,
       PROP_MAX_DATA_REMOTE_SHORTNAME, sink->max_data_remote_init,
       PROP_ENABLE_DATAGRAM_SHORTNAME, sink->enable_datagram, NULL);
+
+  if (gst_quiclib_transport_get_state (
+        GST_QUICLIB_TRANSPORT_CONTEXT (sink->conn)) == QUIC_STATE_NONE) {
+    if (!gst_quiclib_transport_client_connect (sink->conn)) {
+      GST_ERROR_OBJECT (sink, "Couldn't open client connection with location %s",
+          sink->location);
+      gst_quiclib_unref (GST_QUICLIB_TRANSPORT_CONTEXT (sink->conn),
+          GST_QUICLIB_COMMON_USER (sink));
+    }
+  }
 
   g_mutex_unlock (&sink->mutex);
 

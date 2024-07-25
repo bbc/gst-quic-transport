@@ -148,12 +148,12 @@ struct _GstQuicLibCommonUserInterface {
 };
 
 GstQuicLibServerContext *
-gst_quiclib_listen (GstQuicLibCommonUser *user, const gchar *location,
+gst_quiclib_get_server (GstQuicLibCommonUser *user, const gchar *location,
     const gchar *alpns, const gchar *privkey_location,
     const gchar *cert_location, const gchar *sni);
 
 GstQuicLibTransportConnection *
-gst_quiclib_connect (GstQuicLibCommonUser *user, const gchar *location,
+gst_quiclib_get_client (GstQuicLibCommonUser *user, const gchar *location,
     const gchar *alpn);
 
 GInetSocketAddress *

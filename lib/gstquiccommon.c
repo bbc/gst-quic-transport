@@ -51,10 +51,9 @@
 #include "gstquiccommon.h"
 #include "gstquictransport.h"
 #include "gstquicstream.h"
+#include "gstquicpriv.h"
 
 #include <gst/gst.h>
-#include <gio/gresolver.h>
-#include <gio/gunixsocketaddress.h>
 
 G_DEFINE_BOXED_TYPE (GstQuicLibAddressList, gst_quiclib_address_list,
     gst_quiclib_address_list_copy, gst_quiclib_address_list_free)
@@ -136,77 +135,6 @@ G_DEFINE_TYPE_WITH_CODE (GstQuicLibCommon, gst_quiclib_common, GST_TYPE_OBJECT,
 static GObject * gst_quiclib_common_constructor (GType type,
     guint n_construct_params, GObjectConstructParam *construct_params);
 void gst_quiclib_common_dispose (GObject *obj);
-
-static GUri *
-quiclib_parse_location (GstQuicLibCommon *ctx, const gchar *location)
-{
-  GError *err = NULL;
-  GUri *uri = g_uri_parse (location, G_URI_FLAGS_NONE, &err);
-
-  if (uri == NULL) {
-    GST_ERROR_OBJECT (ctx, "Failed to parse location \"%s\" to URI: %s",
-        location, err->message);
-    g_free (err);
-    return NULL;
-  }
-
-  /* Make sure that the default port is 443 if nothing else was specified. */
-  if (g_uri_get_port (uri) == -1) {
-    /* GUri doesn't have a set_port function for some reason... */
-    GUri *default_port_uri = g_uri_build (G_URI_FLAGS_NONE,
-        g_strdup (g_uri_get_scheme (uri)),
-        g_strdup (g_uri_get_userinfo (uri)),
-        g_strdup (g_uri_get_host (uri)),
-        443,
-        g_strdup (g_uri_get_path (uri)),
-        g_strdup (g_uri_get_query (uri)),
-        g_strdup (g_uri_get_fragment (uri)));
-    g_uri_unref (uri);
-    uri = default_port_uri;
-  }
-
-  return uri;
-}
-
-static GInetSocketAddress *
-quiclib_resolve (GstQuicLibCommon *ctx, GUri *uri)
-{
-  GError *err = NULL;
-  GList *addrs, *it = NULL;
-  GInetAddress *addr = NULL;
-  GInetSocketAddress *rv;
-
-  if (ctx->resolver == NULL) {
-    ctx->resolver = g_resolver_get_default ();
-  }
-
-  addrs = g_resolver_lookup_by_name (ctx->resolver, g_uri_get_host (uri), NULL,
-      &err);
-  if (addrs == NULL) {
-    GST_ERROR_OBJECT (ctx, "Failed to resolve host \"%s\": %s",
-        g_uri_get_host (uri), err->message);
-    g_free (err);
-    return NULL;
-  }
-
-  it = addrs;
-
-  while (it != NULL) {
-    GInetAddress *a = (GInetAddress *) it->data;
-    if ((g_inet_address_get_family (a) == G_SOCKET_FAMILY_IPV4) ||
-        (g_inet_address_get_family (a) == G_SOCKET_FAMILY_IPV6)) {
-      addr = a;
-      break;
-    }
-  }
-
-  rv = (GInetSocketAddress * ) g_inet_socket_address_new (addr,
-      g_uri_get_port (uri));
-
-  g_list_free_full (addrs, g_object_unref);
-
-  return rv;
-}
 
 #ifdef USE_HASHTABLE
 static guint
@@ -637,7 +565,7 @@ quiclib_alpns_to_list (gchar *alpns)
 }
 
 GstQuicLibServerContext *
-gst_quiclib_listen (GstQuicLibCommonUser *user, const gchar *location,
+gst_quiclib_get_server (GstQuicLibCommonUser *user, const gchar *location,
     const gchar *alpns, const gchar *privkey_location,
     const gchar *cert_location, const gchar *sni)
 {
@@ -651,13 +579,15 @@ gst_quiclib_listen (GstQuicLibCommonUser *user, const gchar *location,
   GList *users = libctx->servers;
   gchar alpn_str[strnlen (alpns, 255) + 1];
 
-  uri = quiclib_parse_location (libctx, location);
+  uri = gst_quiclib_parse_location (location);
   if (!uri) {
+    GST_ERROR_OBJECT (libctx, "Couldn't parse location \"%s\"", location);
     goto free_libctx;
   }
 
-  sa = quiclib_resolve (libctx, uri);
+  sa = gst_quiclib_resolve (uri);
   if (!sa) {
+    GST_ERROR_OBJECT (libctx, "Couldn't resolve location \"%s\"", location);
     goto free_uri;
   }
 
@@ -683,9 +613,13 @@ gst_quiclib_listen (GstQuicLibCommonUser *user, const gchar *location,
   if (!server) {
     addrs = g_slist_append (addrs, sa);
     users = g_list_append (users, user);
-    server = gst_quiclib_transport_server_listen (
-        QUICLIB_TRANSPORT_USER (libctx), addrs, privkey_location,
-        cert_location, sni, alpn_list, users);
+    server = gst_quiclib_transport_server_new (
+        QUICLIB_TRANSPORT_USER (libctx), privkey_location, cert_location, sni,
+        users);
+
+    g_object_set (server, PROP_LOCATION_SHORT, location,
+        PROP_ALPN_SHORTNAME, alpns, NULL);
+    
     libctx->servers = g_list_append (libctx->servers, server);
     g_assert (libctx->servers);
   } else {
@@ -731,7 +665,7 @@ free_libctx:
 }
 
 GstQuicLibTransportConnection *
-gst_quiclib_connect (GstQuicLibCommonUser *user, const gchar *location,
+gst_quiclib_get_client (GstQuicLibCommonUser *user, const gchar *location,
                      const gchar *alpn)
 {
   GUri *uri;
@@ -741,13 +675,15 @@ gst_quiclib_connect (GstQuicLibCommonUser *user, const gchar *location,
       g_object_new (GST_TYPE_QUICLIB_COMMON, NULL);
   GList *connections = libctx->clients;
 
-  uri = quiclib_parse_location (libctx, location);
+  uri = gst_quiclib_parse_location (location);
   if (!uri) {
+    GST_ERROR_OBJECT (libctx, "Couldn't parse location \"%s\"", location);
     goto free_libctx;
   }
 
-  sa = quiclib_resolve (libctx, uri);
+  sa = gst_quiclib_resolve (uri);
   if (!sa) {
+    GST_ERROR_OBJECT (libctx, "Couldn't resolve location \"%s\"", location);
     goto free_uri;
   }
 
@@ -764,9 +700,10 @@ gst_quiclib_connect (GstQuicLibCommonUser *user, const gchar *location,
 
   if (!conn) {
     connections = g_list_append (connections, user);
-    conn = gst_quiclib_transport_client_connect (
-        QUICLIB_TRANSPORT_USER (libctx), sa, g_uri_get_host (uri), alpn,
+    conn = gst_quiclib_transport_client_new (QUICLIB_TRANSPORT_USER (libctx),
         connections);
+    g_object_set (G_OBJECT (conn), PROP_LOCATION_SHORT, location,
+        PROP_ALPN_SHORTNAME, alpn, NULL);
     libctx->clients = g_list_append (libctx->clients, conn);
     g_assert (libctx->clients);
   } else {

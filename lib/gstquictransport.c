@@ -46,7 +46,7 @@
 #include "gstquicstream.h"
 #include "gstquicdatagram.h"
 #include "gstquiccommon.h"
-/*#include "gstquicsignals.h"*/
+#include "gstquicpriv.h"
 #include <ngtcp2/ngtcp2.h>
 #include <ngtcp2/ngtcp2_crypto.h>
 #include <ngtcp2/ngtcp2_crypto_quictls.h>
@@ -564,6 +564,7 @@ gst_quiclib_transport_context_init (GstQuicLibTransportContext *self)
   priv->tp_sent.max_streams_bidi = QUICLIB_MAX_STREAMS_BIDI_DEFAULT;
   priv->tp_sent.max_streams_uni = QUICLIB_MAX_STREAMS_UNI_DEFAULT;
   priv->tp_sent.num_cids = NUM_CIDS;
+  priv->tp_sent.enable_datagrams = QUICLIB_ENABLE_DATAGRAM_DEFAULT;
 
   g_rec_mutex_init (&priv->rmutex);
 }
@@ -3791,9 +3792,8 @@ quiclib_open_server_socket_foreach (gpointer data, gpointer user_data)
 
 
 GstQuicLibServerContext *
-gst_quiclib_transport_server_listen (GstQuicLibTransportUser *user,
-    GSList *listen_addrs, const gchar *pkey_location,
-    const gchar *cert_location, const gchar *sni, GSList *accept_alpns,
+gst_quiclib_transport_server_new (GstQuicLibTransportUser *user,
+    const gchar *pkey_location, const gchar *cert_location, const gchar *sni,
     gpointer app_ctx)
 {
   int rv;
@@ -3871,21 +3871,9 @@ gst_quiclib_transport_server_listen (GstQuicLibTransportUser *user,
     goto error;
   }
 
-  server->acceptable_alpns = g_slist_copy_deep (accept_alpns,
-      quiclib_copy_gcharstring, NULL);
-
-  server->cert_file_location = cert_location;
-  server->priv_key_location = pkey_location;
-  server->sni_host = sni;
-
-  g_slist_foreach (listen_addrs, quiclib_open_server_socket_foreach, server);
-
-  gst_quiclib_transport_context_set_state (
-      GST_QUICLIB_TRANSPORT_CONTEXT (server), QUIC_STATE_LISTENING);
-
   return server;
 
-  error:
+error:
   if (server->ssl_ctx) {
     SSL_CTX_free (server->ssl_ctx);
   }
@@ -3894,19 +3882,58 @@ gst_quiclib_transport_server_listen (GstQuicLibTransportUser *user,
   return NULL;
 }
 
+gboolean
+gst_quiclib_transport_server_listen (GstQuicLibServerContext *server)
+{
+  gchar *location = NULL;
+  GUri *uri = NULL;
+  GSocketAddress *sa = NULL;
+  QuicLibSocketContext *socket;
+  gboolean rv = FALSE;
+
+  /* TODO: Support multiple listening addresses again */
+  /*g_slist_foreach (listen_addrs, quiclib_open_server_socket_foreach, server);*/
+
+  g_object_get (GST_QUICLIB_TRANSPORT_CONTEXT (server),
+      PROP_LOCATION_SHORT, &location, NULL);
+
+  g_assert (location);
+  uri = gst_quiclib_parse_location (location);
+  if (!uri) {
+    GST_ERROR_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (server),
+        "Couldn't parse location \"%s\"", location);
+    goto error;
+  }
+
+  sa = G_SOCKET_ADDRESS (gst_quiclib_resolve (uri));
+  if (!sa) {
+    GST_ERROR_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (server),
+        "Couldn't resolve location \"%s\"", location);
+    goto error;
+  }
+
+  socket = quiclib_open_socket (GST_QUICLIB_TRANSPORT_CONTEXT (server),
+      (GSocketAddress *) sa);
+
+  server->sockets = g_slist_prepend (server->sockets, socket);
+  gst_quiclib_transport_context_set_state (
+      GST_QUICLIB_TRANSPORT_CONTEXT (server), QUIC_STATE_LISTENING);
+
+  rv = TRUE;
+
+error:
+  if (sa) g_object_unref (sa);
+  if (uri) g_uri_unref (uri);
+  if (location) g_free (location);
+
+  return rv;
+}
+
 GstQuicLibTransportConnection *
-gst_quiclib_transport_client_connect (GstQuicLibTransportUser *user,
-    GInetSocketAddress *location, const gchar *hostname, const gchar *alpn,
+gst_quiclib_transport_client_new (GstQuicLibTransportUser *user,
     gpointer app_ctx)
 {
   gint rv;
-  ngtcp2_cid *dcid = NULL, *scid = NULL;
-  gchar dcid_str[CID_STR_LEN], scid_str[CID_STR_LEN];
-  GError *err = NULL;
-  struct sockaddr *localsa, *remotesa;
-  gsize localsa_size, remotesa_size;
-  gchar *debug_local_addr, *debug_remote_addr;
-  gboolean enable_datagram;
   GstQuicLibTransportConnection *conn =
       g_object_new (GST_TYPE_QUICLIB_TRANSPORT_CONNECTION, NULL);
   if (conn == NULL) return NULL;
@@ -3937,16 +3964,53 @@ gst_quiclib_transport_client_connect (GstQuicLibTransportUser *user,
     GST_ERROR_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn),
         "Failed to configure the client SSL context");
     goto free_ssl_ctx;
+  } 
+
+  return conn;
+
+free_ssl_ctx:
+  SSL_CTX_free (conn->ssl_ctx);
+free_conn:
+  g_object_unref (conn);
+  return NULL;
+}
+
+gboolean
+gst_quiclib_transport_client_connect (GstQuicLibTransportConnection *conn)
+{
+  gint rv;
+  GSocketAddress *sa;
+  ngtcp2_cid *dcid = NULL, *scid = NULL;
+  gchar dcid_str[CID_STR_LEN], scid_str[CID_STR_LEN];
+  GError *err = NULL;
+  gchar *location;
+  GUri *uri;
+  struct sockaddr *localsa, *remotesa;
+  gsize localsa_size, remotesa_size;
+  gchar *debug_local_addr, *debug_remote_addr;
+  gboolean enable_datagram;
+
+  g_object_get (G_OBJECT (conn), PROP_LOCATION_SHORT, &location, NULL);
+  g_assert (location != NULL);
+  uri = gst_quiclib_parse_location (location);
+  if (uri == NULL) {
+    GST_ERROR_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn),
+        "Couldn't parse location \"%s\"", location);
+    goto free_location;
   }
 
-  g_object_set (GST_QUICLIB_TRANSPORT_CONTEXT (conn),
-      PROP_LOCATION_SHORT, location, NULL);
+  sa = G_SOCKET_ADDRESS (gst_quiclib_resolve (uri));
 
-  conn->socket = quiclib_open_socket (GST_QUICLIB_TRANSPORT_CONTEXT (conn),
-      G_SOCKET_ADDRESS (location));
+  if (sa == NULL) {
+    GST_ERROR_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn),
+        "Couldn't resolve location \"%s\"", location);
+    goto free_location;
+  }
+
+  conn->socket = quiclib_open_socket (GST_QUICLIB_TRANSPORT_CONTEXT (conn), sa);
 
   debug_remote_addr =
-      g_socket_connectable_to_string (G_SOCKET_CONNECTABLE (location));
+      g_socket_connectable_to_string (G_SOCKET_CONNECTABLE (sa));
 
   debug_local_addr =
       g_socket_connectable_to_string (G_SOCKET_CONNECTABLE (
@@ -3954,8 +4018,7 @@ gst_quiclib_transport_client_connect (GstQuicLibTransportUser *user,
 
   localsa_size = g_socket_address_get_native_size (
       g_socket_get_local_address (conn->socket->socket, &err));
-  remotesa_size =
-      g_socket_address_get_native_size (G_SOCKET_ADDRESS (location));
+  remotesa_size = g_socket_address_get_native_size (sa);
   localsa = (struct sockaddr *) g_malloc (localsa_size);
   remotesa = (struct sockaddr *) g_malloc (remotesa_size);
   if (g_socket_address_to_native (
@@ -3967,13 +4030,12 @@ gst_quiclib_transport_client_connect (GstQuicLibTransportUser *user,
     goto free_sa;
   }
 
-  if (g_socket_address_to_native (G_SOCKET_ADDRESS (location), remotesa,
-      remotesa_size, &err) == FALSE) {
+  if (g_socket_address_to_native (sa, remotesa, remotesa_size, &err) == FALSE) {
     GST_ERROR_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn),
         "Failed to convert remote socket address %s to native sockaddr: %s",
-        g_socket_connectable_to_string (G_SOCKET_CONNECTABLE (location)),
+        g_socket_connectable_to_string (G_SOCKET_CONNECTABLE (sa)),
         err->message);
-    goto remove_listener;
+    goto free_sa;
   }
 
   ngtcp2_path_storage_init (&conn->path, localsa, localsa_size, remotesa,
@@ -4077,20 +4139,18 @@ gst_quiclib_transport_client_connect (GstQuicLibTransportUser *user,
 
   SSL_set_app_data (conn->ssl, &conn->conn_ref);
   SSL_set_connect_state (conn->ssl);
-  if (alpn) {
-    guchar alpn_len = (guchar) strlen (alpn);
+  if (conn->alpn) {
+    guchar alpn_len = (guchar) strlen (conn->alpn);
     guchar alpn_plf[alpn_len + 1];
     alpn_plf[0] = alpn_len;
-    memcpy (alpn_plf + 1, alpn, alpn_len);
+    memcpy (alpn_plf + 1, conn->alpn, alpn_len);
     if (SSL_set_alpn_protos (conn->ssl, alpn_plf, alpn_len + 1) != 0) {
       GST_ERROR_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn),
           "Failed to set client ALPN");
     }
-
-    conn->alpn = g_strndup (alpn, alpn_len);
   }
 
-  SSL_set_tlsext_host_name (conn->ssl, hostname);
+  SSL_set_tlsext_host_name (conn->ssl, g_uri_get_host (uri));
 
   SSL_set_quic_transport_version (conn->ssl,
       TLSEXT_TYPE_quic_transport_parameters);
@@ -4108,7 +4168,7 @@ gst_quiclib_transport_client_connect (GstQuicLibTransportUser *user,
   }
 
   GST_INFO_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn),
-      "Initiated %s connection with remote peer %s", alpn,
+      "Initiated %s connection with remote peer %s", conn->alpn,
       debug_remote_addr);
 
   gst_quiclib_transport_context_set_state (GST_QUICLIB_TRANSPORT_CONTEXT (conn),
@@ -4119,7 +4179,7 @@ gst_quiclib_transport_client_connect (GstQuicLibTransportUser *user,
 
   return conn;
 
-  remove_listener:
+remove_listener:
   if (dcid != NULL) {
     g_free (dcid);
   }
@@ -4127,20 +4187,22 @@ gst_quiclib_transport_client_connect (GstQuicLibTransportUser *user,
     g_free (scid);
   }
   g_source_destroy (conn->socket->source);
-  free_sa:
+free_sa:
   g_free (localsa);
   g_free (remotesa);
   g_free (debug_remote_addr);
   g_free (debug_local_addr);
   g_object_unref (conn->socket->socket);
   g_free (conn->socket);
-  free_ssl_ctx:
+free_ssl_ctx:
   SSL_CTX_free (conn->ssl_ctx);
-  free_conn:
-  g_object_unref (conn);
   if (err != NULL) {
     g_error_free (err);
   }
+free_location:
+  if (sa) g_object_unref (sa);
+  if (uri) g_uri_unref (uri);
+  if (location) g_free (location);
   return NULL;
 }
 

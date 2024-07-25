@@ -200,15 +200,19 @@ struct _GstQuicLibTransportUserInterface {
 };
 
 GstQuicLibServerContext *
-gst_quiclib_transport_server_listen (GstQuicLibTransportUser *user,
-    GSList *listen_addrs, const gchar *pkey_location,
-    const gchar *cert_location, const gchar *sni, GSList *accept_alpns,
+gst_quiclib_transport_server_new (GstQuicLibTransportUser *user,
+    const gchar *pkey_location, const gchar *cert_location, const gchar *sni,
     gpointer app_ctx);
 
+gboolean
+gst_quiclib_transport_server_listen (GstQuicLibServerContext *server);
+
 GstQuicLibTransportConnection *
-gst_quiclib_transport_client_connect (GstQuicLibTransportUser *user,
-    GInetSocketAddress *location, const gchar *hostname, const gchar *alpn,
+gst_quiclib_transport_client_new (GstQuicLibTransportUser *user,
     gpointer app_ctx);
+
+gboolean
+gst_quiclib_transport_client_connect (GstQuicLibTransportConnection *conn);
 
 typedef enum _GstQUICMode GstQUICMode;
 GstQUICMode

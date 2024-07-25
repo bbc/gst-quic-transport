@@ -690,14 +690,14 @@ gst_quicsrc_quiclib_connect (GstQUICSrc *src)
 
   switch (src->mode) {
   case QUICLIB_MODE_CLIENT:
-    src->conn = gst_quiclib_connect (GST_QUICLIB_COMMON_USER (src),
+    src->conn = gst_quiclib_get_client (GST_QUICLIB_COMMON_USER (src),
         src->location, src->alpn);
     if (src->conn == NULL) return FALSE;
 
     obj = G_OBJECT (src->conn);
     break;
   case QUICLIB_MODE_SERVER:
-    src->server_ctx = gst_quiclib_listen (GST_QUICLIB_COMMON_USER (src),
+    src->server_ctx = gst_quiclib_get_server (GST_QUICLIB_COMMON_USER (src),
         src->location, src->alpn, src->privkey_location, src->cert_location,
         src->sni);
     if (src->server_ctx == NULL) return FALSE;
@@ -716,6 +716,30 @@ gst_quicsrc_quiclib_connect (GstQUICSrc *src)
       PROP_MAX_DATA_REMOTE_SHORTNAME, src->max_data_remote_init,
       PROP_ENABLE_DATAGRAM_SHORTNAME, src->enable_datagram, NULL);
 
+  if (gst_quiclib_transport_get_state (GST_QUICLIB_TRANSPORT_CONTEXT (obj))
+      == QUIC_STATE_NONE) {
+    switch (src->mode) {
+      case QUICLIB_MODE_CLIENT:
+        if (!gst_quiclib_transport_client_connect (src->conn)) {
+          GST_ERROR_OBJECT (src,
+              "Couldn't open client connection with location %s",
+              src->location);
+          gst_quiclib_unref (GST_QUICLIB_TRANSPORT_CONTEXT (src->conn),
+              GST_QUICLIB_COMMON_USER (src));
+          return FALSE;
+        }
+        break;
+      case QUICLIB_MODE_SERVER:
+        if (!gst_quiclib_transport_server_listen (src->server_ctx)) {
+          GST_ERROR_OBJECT (src, "Couldn't listen on server address %s",
+              src->location);
+          gst_quiclib_unref (GST_QUICLIB_TRANSPORT_CONTEXT (src->server_ctx),
+              GST_QUICLIB_COMMON_USER (src));
+          return FALSE;
+        }
+        break;
+    }
+  }
   return TRUE;
 }
 

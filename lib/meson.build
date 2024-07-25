@@ -89,7 +89,8 @@ quicdatagram_dep = declare_dependency(link_with: quicdatagram,
 
 quiclib_sources = [
   'gstquiccommon.c',
-  'gstquictransport.c'
+  'gstquictransport.c',
+  'gstquicpriv.c'
   ]
 
 quiclib = library('gstquiclib',
