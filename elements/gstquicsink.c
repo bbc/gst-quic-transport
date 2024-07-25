@@ -620,9 +620,9 @@ gst_quicsink_render (GstBaseSink * sink, GstBuffer * buffer)
 
   GST_DEBUG_OBJECT (quicsink, "Received buffer of size %lu", buf_size);
 
-  while (quicsink->conn == NULL ||
-      gst_quiclib_transport_get_state (quicsink->conn) != QUIC_STATE_OPEN) {
   g_mutex_lock (&quicsink->mutex);
+  while (quicsink->conn == NULL || gst_quiclib_transport_get_state (
+        GST_QUICLIB_TRANSPORT_CONTEXT (quicsink->conn)) != QUIC_STATE_OPEN) {
     /*
      * TODO: Drop DATAGRAMs? Return error state? What's the right thing to do
      * here? For now, this just blocks the pipeline, which is probably not
