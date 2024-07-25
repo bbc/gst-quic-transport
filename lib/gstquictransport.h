@@ -101,7 +101,7 @@ typedef enum _GstQuicLibTransportContextMode {
   QUIC_CTX_CLIENT
 } GstQuicLibTransportContextMode;
 
-GST_API_EXPORT GType
+GType
 gst_quiclib_transport_context_mode_get_type (void);
 #define GST_QUICLIB_TRANSPORT_CONTEXT_MODE_TYPE \
   (gst_quiclib_transport_context_mode_get_type ())
@@ -264,7 +264,7 @@ typedef enum {
 	GST_QUICLIB_TRUST_MODE_WARN,
 	GST_QUICLIB_TRUST_MODE_LAX
 } GstQuicLibTrustMode;
-GST_API_EXPORT GType
+GType
 gst_quiclib_trust_mode_get_type (void);
 #define GST_QUICLIB_TRUST_MODE_TYPE (gst_quiclib_trust_mode_get_type ())
 #define GST_QUICLIB_DEFAULT_TRUST_MODE GST_QUICLIB_TRUST_MODE_LAX

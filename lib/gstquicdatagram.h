@@ -60,21 +60,21 @@ struct _GstQuicLibDatagramMeta {
 
 typedef guint64 GstQuicLibDatagramTicket;
 
-GST_API_EXPORT GType
+GType
 gst_quiclib_datagram_meta_api_get_type (void);
 #define GST_QUICLIB_DATAGRAM_META_API_TYPE \
   (gst_quiclib_datagram_meta_api_get_type())
 
 /* implementation */
 
-GST_API_EXPORT const GstMetaInfo
+const GstMetaInfo
 *gst_quiclib_datagram_meta_get_info (void);
 #define GST_QUICLIB_DATAGRAM_META_INFO (gst_quiclib_datagram_meta_get_info())
 
-GST_API_EXPORT GstQuicLibDatagramMeta *
+GstQuicLibDatagramMeta *
 gst_buffer_add_quiclib_datagram_meta (GstBuffer *buffer, guint64 length);
 
-GST_API_EXPORT GstQuicLibDatagramMeta *
+GstQuicLibDatagramMeta *
 gst_buffer_get_quiclib_datagram_meta (GstBuffer *buffer);
 
 G_END_DECLS

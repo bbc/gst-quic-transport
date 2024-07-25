@@ -61,24 +61,24 @@ struct _GstQuicLibStreamMeta {
 	gboolean final;
 };
 
-GST_API_EXPORT GType
+GType
 gst_quiclib_stream_meta_api_get_type (void);
 #define GST_QUICLIB_STREAM_META_API_TYPE (gst_quiclib_stream_meta_api_get_type())
 
 /* implementation */
 
-GST_API_EXPORT const GstMetaInfo
+const GstMetaInfo
 *gst_quiclib_stream_meta_get_info (void);
 #define GST_QUICLIB_STREAM_META_INFO (gst_quiclib_stream_meta_get_info())
 
-GST_API_EXPORT GstQuicLibStreamMeta *
+GstQuicLibStreamMeta *
 gst_buffer_add_quiclib_stream_meta (GstBuffer *buffer, gint64 stream_id,
 									guint64 offset, guint64 length, gboolean final);
 
-GST_API_EXPORT GstQuicLibStreamMeta *
+GstQuicLibStreamMeta *
 gst_buffer_get_quiclib_stream_meta (GstBuffer *buffer);
 
-GST_API_EXPORT guint64
+guint64
 gst_buffer_get_quiclib_stream_meta_id (GstBuffer *buffer);
 
 #define QUICLIB_STREAM_IS_CLIENT_INIT(id) ((id & 0x1) == 0)
@@ -90,35 +90,35 @@ gst_buffer_get_quiclib_stream_meta_id (GstBuffer *buffer);
 #define QUICLIB_STREAM_IS_UNI_CLIENT(id) ((id & 0x3) == 2)
 #define QUICLIB_STREAM_IS_UNI_SERVER(id) ((id & 0x3) == 3)
 
-GST_API_EXPORT GstQuery *
+GstQuery *
 gst_query_new_get_associated_stream_id (GstPad *local_pad);
 
-GST_API_EXPORT gboolean
+gboolean
 gst_query_is_associated_stream_id (GstQuery *query);
 
-GST_API_EXPORT GstPad *
+GstPad *
 gst_query_get_associated_stream_id_pad (GstQuery *query, GstElement *local);
 
-GST_API_EXPORT gboolean
+gboolean
 gst_query_fill_get_associated_stream_id (GstQuery *query, guint64 stream_id);
 
-GST_API_EXPORT gboolean
+gboolean
 gst_query_parse_get_associated_stream_id (GstQuery *query, guint64 *stream_id);
 
 
-GST_API_EXPORT GstQuery *
+GstQuery *
 gst_query_new_get_associated_pad (guint64 stream_id);
 
-GST_API_EXPORT gboolean
+gboolean
 gst_query_is_associated_pad (GstQuery *query);
 
-GST_API_EXPORT guint64
+guint64
 gst_query_get_associated_pad_stream_id (GstQuery *query);
 
-GST_API_EXPORT gboolean
+gboolean
 gst_query_fill_get_associated_pad (GstQuery *query, GstPad *pad);
 
-GST_API_EXPORT gboolean
+gboolean
 gst_query_parse_get_associated_pad (GstQuery *query, GstPad **pad);
 
 G_END_DECLS
