@@ -126,9 +126,9 @@ gst_quicsink_quiclib_listen (GstQuicSink *sink)
 {
   g_return_val_if_fail (sink->mode == QUICLIB_MODE_SERVER, FALSE);
 
-  g_rec_mutex_lock (&sink->mutex);
-
   gst_quicsink_quiclib_stop_listen (sink);
+
+  g_mutex_lock (&sink->mutex);
 
   GST_TRACE_OBJECT (sink, "Opening listening port on %s", sink->location);
 
@@ -147,7 +147,7 @@ gst_quicsink_quiclib_listen (GstQuicSink *sink)
       PROP_MAX_DATA_REMOTE_SHORTNAME, sink->max_data_remote_init,
       PROP_ENABLE_DATAGRAM_SHORTNAME, sink->enable_datagram, NULL);
 
-  g_rec_mutex_unlock (&sink->mutex);
+  g_mutex_unlock (&sink->mutex);
 
   return sink->server_ctx != NULL;
 }
@@ -157,9 +157,9 @@ gst_quicsink_quiclib_connect (GstQuicSink *sink)
 {
   g_return_val_if_fail (sink->mode == QUICLIB_MODE_CLIENT, FALSE);
 
-  g_rec_mutex_lock (&sink->mutex);
-
   gst_quicsink_quiclib_disconnect (sink);
+
+  g_mutex_lock (&sink->mutex);
 
   GST_TRACE_OBJECT (sink, "Connecting to %s with ALPN %s", sink->location,
       sink->alpn);
@@ -177,7 +177,7 @@ gst_quicsink_quiclib_connect (GstQuicSink *sink)
       PROP_MAX_DATA_REMOTE_SHORTNAME, sink->max_data_remote_init,
       PROP_ENABLE_DATAGRAM_SHORTNAME, sink->enable_datagram, NULL);
 
-  g_rec_mutex_unlock (&sink->mutex);
+  g_mutex_unlock (&sink->mutex);
 
   return sink->conn != NULL;
 }
@@ -185,18 +185,18 @@ gst_quicsink_quiclib_connect (GstQuicSink *sink)
 static gboolean
 gst_quicsink_quiclib_disconnect (GstQuicSink *sink)
 {
-  g_rec_mutex_lock (&sink->mutex);
+  g_mutex_lock (&sink->mutex);
   GST_TRACE_OBJECT (sink, "Disconnect called - %sactive connection",
       (sink->conn)?(""):("no "));
   if (sink->conn != NULL) {
     gst_quiclib_unref (GST_QUICLIB_TRANSPORT_CONTEXT (sink->conn),
         GST_QUICLIB_COMMON_USER (sink));
     sink->conn = NULL;
-    g_rec_mutex_unlock (&sink->mutex);
+    g_mutex_unlock (&sink->mutex);
     return TRUE;
   }
 
-  g_rec_mutex_unlock (&sink->mutex);
+  g_mutex_unlock (&sink->mutex);
 
   return FALSE;
 }
@@ -206,9 +206,9 @@ gst_quicsink_quiclib_stop_listen (GstQuicSink *sink)
 {
   g_return_val_if_fail (sink->mode == QUICLIB_MODE_SERVER, FALSE);
 
-  g_rec_mutex_lock (&sink->mutex);
-
   gst_quicsink_quiclib_disconnect (sink);
+
+  g_mutex_lock (&sink->mutex);
 
   GST_TRACE_OBJECT (sink, "Stop listen called - %sactive server",
         (sink->server_ctx)?(""):("no "));
@@ -217,10 +217,10 @@ gst_quicsink_quiclib_stop_listen (GstQuicSink *sink)
     gst_quiclib_unref (GST_QUICLIB_TRANSPORT_CONTEXT (sink->server_ctx),
             GST_QUICLIB_COMMON_USER (sink));
     sink->server_ctx = NULL;
-    g_rec_mutex_unlock (&sink->mutex);
+    g_mutex_unlock (&sink->mutex);
     return TRUE;
   }
-  g_rec_mutex_unlock (&sink->mutex);
+  g_mutex_unlock (&sink->mutex);
   return FALSE;
 }
 
@@ -283,7 +283,7 @@ gst_quicsink_init (GstQuicSink * sink)
 {
   gst_quiclib_common_init_endpoint_properties (sink);
 
-  g_rec_mutex_init (&sink->mutex);
+  g_mutex_init (&sink->mutex);
   g_cond_init (&sink->ctx_change);
 }
 
@@ -306,10 +306,10 @@ gst_quicsink_set_property (GObject * object, guint prop_id,
       break;
     case PROP_QUIC_ENDPOINT_SERVER_ENUM_CASES:
       if (sink->mode == QUICLIB_MODE_SERVER) {
-        g_rec_mutex_lock (&sink->mutex);
+        g_mutex_lock (&sink->mutex);
         gst_quiclib_common_set_endpoint_property_checked (sink,
             sink->server_ctx, pspec, prop_id, value);
-        g_rec_mutex_unlock (&sink->mutex);
+        g_mutex_unlock (&sink->mutex);
       } else {
         GST_WARNING_OBJECT (sink,
             "Cannot set server property %s in client mode", pspec->name);
@@ -335,10 +335,10 @@ gst_quicsink_get_property (GObject * object, guint prop_id,
       break;
     case PROP_QUIC_ENDPOINT_SERVER_ENUM_CASES:
       if (sink->mode == QUICLIB_MODE_SERVER) {
-        g_rec_mutex_lock (&sink->mutex);
+        g_mutex_lock (&sink->mutex);
         gst_quiclib_common_get_endpoint_property_checked (sink,
             sink->server_ctx, pspec, prop_id, value);
-        g_rec_mutex_unlock (&sink->mutex);
+        g_mutex_unlock (&sink->mutex);
       } else {
         GST_WARNING_OBJECT (sink,
             "Cannot get server property %s in client mode", pspec->name);
@@ -434,13 +434,13 @@ gst_quicsink_query (GstBaseSink * parent, GstQuery * query)
 
       GST_LOG_OBJECT (sink, "Received connection state query");
 
-      g_rec_mutex_lock (&sink->mutex);
+      g_mutex_lock (&sink->mutex);
       if (sink->conn == NULL) {
         gst_structure_set (s, QUICLIB_CONNECTION_STATE,
             gst_quiclib_transport_state_get_type (), QUIC_STATE_NONE,
             NULL);
         GST_WARNING_OBJECT (sink, "No QUIC connection to query the state of");
-        g_rec_mutex_unlock (&sink->mutex);
+        g_mutex_unlock (&sink->mutex);
         break;
       }
 
@@ -457,7 +457,7 @@ gst_quicsink_query (GstBaseSink * parent, GstQuery * query)
       addrstr = g_socket_connectable_to_string (
           G_SOCKET_CONNECTABLE (peer_addr));
 
-      g_rec_mutex_unlock (&sink->mutex);
+      g_mutex_unlock (&sink->mutex);
 
       GST_LOG_OBJECT (sink, "Returning connection state query with state %s"
           " for connection with peer %s", statestr, addrstr);
@@ -482,14 +482,14 @@ gst_quicsink_query (GstBaseSink * parent, GstQuery * query)
             "No QUIC connection to open a new stream for");
         state = QUIC_STREAM_ERROR_CONNECTION;
       } else {
-        g_rec_mutex_lock (&sink->mutex);
+        g_mutex_lock (&sink->mutex);
         g_return_val_if_fail (gst_structure_get_enum (s, QUICLIB_STREAM_TYPE,
             quiclib_stream_type_get_type (), (gint *) &type), FALSE);
 
         stream_id = gst_quiclib_transport_open_stream (sink->conn,
             type == QUIC_STREAM_BIDI, NULL);
 
-        g_rec_mutex_unlock (&sink->mutex);
+        g_mutex_unlock (&sink->mutex);
 
         switch (stream_id) {
         case GST_QUICLIB_ERR:
@@ -527,7 +527,7 @@ gst_quicsink_query (GstBaseSink * parent, GstQuery * query)
 
       GST_LOG_OBJECT (sink, "Received stream close query");
 
-      g_rec_mutex_lock (&sink->mutex);
+      g_mutex_lock (&sink->mutex);
 
       g_return_val_if_fail (sink->conn, FALSE);
 
@@ -545,7 +545,7 @@ gst_quicsink_query (GstBaseSink * parent, GstQuery * query)
       rv = gst_quiclib_transport_close_stream (sink->conn, stream_id,
           reason);
 
-      g_rec_mutex_unlock (&sink->mutex);
+      g_mutex_unlock (&sink->mutex);
       
       return rv;
     } else if (gst_structure_has_name (s, QUICLIB_STREAM_STATE)) {
@@ -555,7 +555,7 @@ gst_quicsink_query (GstBaseSink * parent, GstQuery * query)
 
       GST_LOG_OBJECT (sink, "Received stream state query");
 
-      g_rec_mutex_lock (&sink->mutex);
+      g_mutex_lock (&sink->mutex);
 
       g_return_val_if_fail (gst_structure_get_uint64 (s, QUICLIB_STREAMID_KEY,
           &stream_id), FALSE);
@@ -563,7 +563,7 @@ gst_quicsink_query (GstBaseSink * parent, GstQuery * query)
       state = gst_quiclib_transport_stream_state (sink->conn, stream_id);
       statestr = g_enum_to_string (quiclib_stream_status_get_type (), state);
 
-      g_rec_mutex_unlock (&sink->mutex);
+      g_mutex_unlock (&sink->mutex);
 
       GST_LOG_OBJECT (sink, "Return stream state query for stream %lu with "
           "state %s", stream_id, statestr);
@@ -600,9 +600,9 @@ gst_quicsink_render (GstBaseSink * sink, GstBuffer * buffer)
 
   GST_DEBUG_OBJECT (quicsink, "Received buffer of size %lu", buf_size);
 
-  g_rec_mutex_lock (&quicsink->mutex);
   while (quicsink->conn == NULL ||
       gst_quiclib_transport_get_state (quicsink->conn) != QUIC_STATE_OPEN) {
+  g_mutex_lock (&quicsink->mutex);
     /*
      * TODO: Drop DATAGRAMs? Return error state? What's the right thing to do
      * here? For now, this just blocks the pipeline, which is probably not
@@ -622,7 +622,7 @@ gst_quicsink_render (GstBaseSink * sink, GstBuffer * buffer)
         gst_quiclib_error_as_string (err), b_sent);
         
     if (err != GST_QUICLIB_ERR_OK) {
-      g_rec_mutex_unlock (&quicsink->mutex);
+      g_mutex_unlock (&quicsink->mutex);
       switch (err) {
         case GST_QUICLIB_ERR:
         case GST_QUICLIB_ERR_STREAM_ID_BLOCKED:
@@ -650,7 +650,7 @@ gst_quicsink_render (GstBaseSink * sink, GstBuffer * buffer)
         buf_size, sent);
   }
 
-  g_rec_mutex_unlock (&quicsink->mutex);
+  g_mutex_unlock (&quicsink->mutex);
 
   GST_DEBUG_OBJECT (quicsink, "Buffer sent");
 
@@ -685,14 +685,14 @@ quicsink_user_handshake_complete (GstQuicLibCommonUser *self,
   GST_TRACE_OBJECT (quicsink, "Handshake complete for %s connection with %s",
       alpn, addr);
 
-  g_rec_mutex_lock (&quicsink->mutex);
+  g_mutex_lock (&quicsink->mutex);
 
   g_free (addr);
 
   quicsink->conn = conn;
 
   g_cond_signal (&quicsink->ctx_change);
-  g_rec_mutex_unlock (&quicsink->mutex);
+  g_mutex_unlock (&quicsink->mutex);
 
   gst_element_set_state (GST_ELEMENT (quicsink), GST_STATE_PLAYING);
 
