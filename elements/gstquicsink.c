@@ -657,11 +657,13 @@ gst_quicsink_render (GstBaseSink * sink, GstBuffer * buffer)
               "packet number space, this connection is done!");
           return GST_FLOW_EOS;
         case GST_QUICLIB_ERR_EXTENSION_NOT_SUPPORTED:
-          GST_ERROR_OBJECT (quicsink, "Required extension to send buffer not supported");
+          GST_ERROR_OBJECT (quicsink,
+              "Required extension to send buffer not supported");
           return GST_FLOW_QUIC_EXTENSION_NOT_SUPPORTED;
         default:
           GST_ERROR_OBJECT (quicsink,
               "QuicLib returned unknown return error code %d", err);
+          return GST_FLOW_ERROR;
       }
     }
     
