@@ -4944,7 +4944,7 @@ gst_quiclib_transport_send_stream (GstQuicLibTransportConnection *conn,
   ngtcp2_vec *vec = NULL, *vec_orig;
   GList *maps = NULL;
   size_t n;
-  GstQuicLibError rv;
+  GstQuicLibError rv = GST_QUICLIB_ERR_OK;
   GstQuicLibStreamContext *stream;
   GstQuicLibStreamMeta *meta = gst_buffer_get_quiclib_stream_meta (buf);
   gsize buf_size = gst_buffer_get_size (buf);
