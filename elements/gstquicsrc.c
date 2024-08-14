@@ -287,6 +287,7 @@ quicsrc_user_stream_closed (GstQuicLibCommonUser *self,
 
     if (meta && meta->stream_id == (gint64) stream_id) {
       last_meta = meta;
+      break;
     }
   }
 
