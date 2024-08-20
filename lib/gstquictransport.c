@@ -81,6 +81,8 @@ gst_quiclib_error_as_string (GstQuicLibError err)
 {
   switch (err) {
     case GST_QUICLIB_ERR_OK: return "OK";
+    case GST_QUICLIB_ERR_INTERNAL: return "Internal error";
+    case GST_QUICLIB_ERR_OOM: return "Out of memory";
     case GST_QUICLIB_ERR: return "Generic Error";
     case GST_QUICLIB_ERR_STREAM_ID_BLOCKED: return "Stream ID Blocked";
     case GST_QUICLIB_ERR_STREAM_DATA_BLOCKED: return "Stream Data Blocked";
@@ -88,6 +90,9 @@ gst_quiclib_error_as_string (GstQuicLibError err)
     case GST_QUICLIB_ERR_CONN_DATA_BLOCKED: return "Connection Data Blocked";
     case GST_QUICLIB_ERR_PACKET_NUM_EXHAUSTED:
       return "Packet Number Space Exhausted";
+    case GST_QUICLIB_ERR_CONN_CLOSED: return "Connection closed";
+    case GST_QUICLIB_ERR_EXTENSION_NOT_SUPPORTED:
+      return "Required extension not supported";
   }
 
   return "Unknown Error";
@@ -259,8 +264,7 @@ struct _SocketControlMessagePKTINFO {
 G_DEFINE_TYPE (SocketControlMessagePKTINFO, socket_control_message_pktinfo,
     G_TYPE_SOCKET_CONTROL_MESSAGE);
 
-static void socket_control_message_pktinfo_finalise (
-    SocketControlMessagePKTINFO *pktinfoscm);
+static void socket_control_message_pktinfo_finalise (GObject *object);
 static void socket_control_message_pktinfo_set_property (GObject *object,
     guint prop_id, const GValue *value, GParamSpec *pspec);
 static void socket_control_message_pktinfo_get_property (GObject *object,
@@ -313,9 +317,10 @@ socket_control_message_pktinfo_init (SocketControlMessagePKTINFO *pktinfoscm)
 }
 
 static void
-socket_control_message_pktinfo_finalise (
-    SocketControlMessagePKTINFO *pktinfoscm)
+socket_control_message_pktinfo_finalise (GObject *object)
 {
+  SocketControlMessagePKTINFO *pktinfoscm =
+      SOCKET_CONTROL_MESSAGE_PKTINFO (object);
   if (pktinfoscm->local_address) g_object_unref (pktinfoscm->local_address);
   if (pktinfoscm->destination_address)
     g_object_unref (pktinfoscm->destination_address);
@@ -1444,7 +1449,7 @@ static void gst_quiclib_transport_connection_get_property (GObject * object,
       break;
     case PROP_PEER_ADDRESSES:
     {
-      ngtcp2_path *path;
+      const ngtcp2_path *path;
       GSocketAddress *sa;
       GList *list = NULL;
 
@@ -1460,7 +1465,7 @@ static void gst_quiclib_transport_connection_get_property (GObject * object,
     }
     case PROP_LOCAL_ADDRESSES:
     {
-      ngtcp2_path *path;
+      const ngtcp2_path *path;
       GSocketAddress *sa;
       GList *list = NULL;
 
@@ -2545,9 +2550,11 @@ quiclib_ngtcp2_on_stream_open (ngtcp2_conn *quic_conn, int64_t stream_id,
 {
   GstQuicLibTransportConnection *conn =
       (GstQuicLibTransportConnection *) user_data;
+#ifndef ASYNC_CALLBACKS
   GstQuicLibTransportUserInterface *iface =
       QUICLIB_TRANSPORT_USER_GET_IFACE (
           gst_quiclib_transport_context_get_user (conn));
+#endif
   gboolean rv = TRUE;
 
   switch (stream_id & 0x3) {
@@ -2588,9 +2595,11 @@ quiclib_ngtcp2_on_stream_close (ngtcp2_conn *quic_conn, uint32_t flags,
       (GstQuicLibTransportConnection *) user_data;
   GstQuicLibStreamContext *stream =
       (GstQuicLibStreamContext *) stream_user_data;
+#ifndef ASYNC_CALLBACKS
   GstQuicLibTransportUserInterface *iface =
       QUICLIB_TRANSPORT_USER_GET_IFACE (
           gst_quiclib_transport_context_get_user (conn));
+#endif
 
   GST_DEBUG_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn),
       "Stream %ld is closed", stream_id);
@@ -2624,9 +2633,11 @@ quiclib_ngtcp2_on_stream_reset (ngtcp2_conn *quic_conn, int64_t stream_id,
       (GstQuicLibTransportConnection *) user_data;
   GstQuicLibStreamContext *stream =
       (GstQuicLibStreamContext *) stream_user_data;
+#ifndef ASYNC_CALLBACKS
   GstQuicLibTransportUserInterface *iface =
       QUICLIB_TRANSPORT_USER_GET_IFACE (
           gst_quiclib_transport_context_get_user (conn));
+#endif
 
   GST_INFO_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn),
       "Stream %ld was reset after %lu bytes with error code %lu", stream_id,
@@ -4177,7 +4188,7 @@ gst_quiclib_transport_client_connect (GstQuicLibTransportConnection *conn)
   g_free (debug_remote_addr);
   g_free (debug_local_addr);
 
-  return conn;
+  return TRUE;
 
 remove_listener:
   if (dcid != NULL) {
@@ -4194,7 +4205,6 @@ free_sa:
   g_free (debug_local_addr);
   g_object_unref (conn->socket->socket);
   g_free (conn->socket);
-free_ssl_ctx:
   SSL_CTX_free (conn->ssl_ctx);
   if (err != NULL) {
     g_error_free (err);
@@ -4203,7 +4213,7 @@ free_location:
   if (sa) g_object_unref (sa);
   if (uri) g_uri_unref (uri);
   if (location) g_free (location);
-  return NULL;
+  return FALSE;
 }
 
 GstQUICMode

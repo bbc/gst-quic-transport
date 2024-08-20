@@ -53,7 +53,7 @@ G_BEGIN_DECLS
 #define GST_TYPE_QUICLIB_TRANSPORT_CONTEXT ( \
     gst_quiclib_transport_context_get_type())
 G_DECLARE_DERIVABLE_TYPE (GstQuicLibTransportContext,
-    gst_quiclib_transport_context, GST, QUICLIB_TRANSPORT_CONTEXT, GstObject);
+    gst_quiclib_transport_context, GST, QUICLIB_TRANSPORT_CONTEXT, GstObject)
 
 typedef enum {
   GST_QUICLIB_ERR_OK = 0,
@@ -87,13 +87,13 @@ struct _GstQuicLibTransportContextClass {
     gst_quiclib_server_context_get_type())
 G_DECLARE_FINAL_TYPE (GstQuicLibServerContext,
     gst_quiclib_server_context, GST, QUICLIB_SERVER_CONTEXT,
-    GstQuicLibTransportContext);
+    GstQuicLibTransportContext)
 
 #define GST_TYPE_QUICLIB_TRANSPORT_CONNECTION ( \
     gst_quiclib_transport_connection_get_type())
 G_DECLARE_FINAL_TYPE (GstQuicLibTransportConnection,
     gst_quiclib_transport_connection, GST, QUICLIB_TRANSPORT_CONNECTION,
-    GstQuicLibTransportContext);
+    GstQuicLibTransportContext)
 
 typedef enum _GstQuicLibTransportContextMode {
   QUIC_CTX_NONE,
@@ -140,7 +140,7 @@ typedef enum _GstQuicLibTransportState {
 
 #define GST_QUICLIB_TRANSPORT_USER gst_quiclib_transport_user_get_type ()
 G_DECLARE_INTERFACE (GstQuicLibTransportUser, gst_quiclib_transport_user, \
-    QUICLIB, TRANSPORT_USER, GstObject);
+    QUICLIB, TRANSPORT_USER, GstObject)
 
 struct _GstQuicLibTransportUserInterface {
   GTypeInterface parent;

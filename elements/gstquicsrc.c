@@ -653,12 +653,11 @@ gst_quicsrc_create (GstPushSrc *psrc, GstBuffer **outbuf)
 
   if (src->frames == NULL) {
     GstState current, pending;
-    GstStateChangeReturn scr;
 
     GST_DEBUG_OBJECT (src, "Waiting for frames from QUICLIB...");
     g_cond_wait (&src->signal, &src->mutex);
 
-    scr = gst_element_get_state (GST_ELEMENT (src), &current, &pending, 0);
+    gst_element_get_state (GST_ELEMENT (src), &current, &pending, 0);
     if (current != GST_STATE_PLAYING) {
       return GST_FLOW_OK;
     }
