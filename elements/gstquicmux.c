@@ -128,7 +128,7 @@ quic_mux_new_stream_object (GstQuicMux *quicmux, guint64 stream_id, GstPad *pad)
   pthread_mutex_unlock (&quicmux->p_mutex);
 
   GST_TRACE_OBJECT (quicmux, "Added new stream object with stream ID %lu and "
-      "pad %p - pad_to_stream count %u, id_to_stream count %u",
+      "pad %" GST_PTR_FORMAT " - pad_to_stream count %u, id_to_stream count %u",
       stream->stream_id, stream->sinkpad,
       g_hash_table_size (quicmux->pad_to_stream),
       g_hash_table_size (quicmux->id_to_stream));
@@ -386,6 +386,8 @@ quic_mux_close_stream_from_pad (GstQuicMux *quicmux, GstPad *pad,
     }
     gst_query_unref (closeq);
 
+    gst_element_remove_pad (GST_ELEMENT (quicmux), pad);
+
     return TRUE;
   }
 
@@ -409,8 +411,6 @@ quic_mux_pad_unlinked (GstPad * self, GstPad * peer, gpointer user_data)
       GST_PTR_FORMAT, self, peer);
 
   quic_mux_close_stream_from_pad (quicmux, self, 0);
-
-  gst_element_remove_pad (GST_ELEMENT (quicmux), self);
 }
 
 /**
