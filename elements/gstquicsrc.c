@@ -79,7 +79,8 @@ GST_DEBUG_CATEGORY_STATIC (gst_quicsrc_debug);
 enum
 {
   PROP_0,
-  PROP_QUIC_ENDPOINT_ENUMS
+  PROP_QUIC_ENDPOINT_ENUMS,
+  PROP_QUIC_CONNECTION_CTX
 };
 
 static guint signals[GST_QUICLIB_SIGNALS_MAX];
@@ -161,6 +162,10 @@ gst_quicsrc_class_init (GstQUICSrcClass * klass)
   gstpushsrc_class->create = GST_DEBUG_FUNCPTR (gst_quicsrc_create);
 
   gst_quiclib_common_install_endpoint_properties (gobject_class);
+
+  g_object_class_install_property (gobject_class, PROP_QUIC_CONNECTION_CTX,
+      g_param_spec_pointer ("quic-ctx", "QUIC Transport Context",
+          "Underlying QUIC transport context", G_PARAM_READABLE));
 
   signals[GST_QUICLIB_HANDSHAKE_COMPLETE_SIGNAL] =
     gst_quiclib_handshake_complete_signal_new (klass);
@@ -495,6 +500,9 @@ gst_quicsrc_get_property (GObject * object, guint prop_id,
         GST_WARNING_OBJECT (src,
             "Cannot get server property %s in client mode", pspec->name);
       }
+      break;
+    case PROP_QUIC_CONNECTION_CTX:
+      g_value_set_pointer (value, (gpointer) src->conn);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);

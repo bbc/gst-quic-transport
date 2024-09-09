@@ -303,6 +303,35 @@ gst_quiclib_transport_send_datagram (GstQuicLibTransportConnection *conn,
  * TODO: Move the varint set/get functions here
  */
 
+typedef struct {
+    const gchar *quic_implementation;
+    const gchar *quic_implementation_version;
+
+    struct {
+        guint64 min;
+        guint64 meandev;
+        guint64 smoothed;
+    } rtt;
+
+    guint64 cwnd;
+    guint64 bytes_in_flight;
+
+    struct {
+        guint64 send;
+        guint64 receive;
+    } rate;
+
+    struct {
+        guint64 sent;
+        guint64 received;
+        guint64 rtx;
+    } pkt_counts;
+} GstQuicLibConnStats;
+
+gboolean
+gst_quiclib_transport_get_conn_stats (GstQuicLibTransportConnection *conn,
+    GstQuicLibConnStats *conn_stats);
+
 G_END_DECLS
 
 #endif /* __GSTLIB_QUICTRANSPORT_H__ */

@@ -78,6 +78,7 @@ enum
 {
   PROP_0,
   PROP_QUIC_ENDPOINT_ENUMS,
+  PROP_QUIC_CONNECTION_CTX
 };
 
 static guint signals[GST_QUICLIB_SIGNALS_MAX];
@@ -269,6 +270,10 @@ gst_quicsink_class_init (GstQuicSinkClass * klass)
 
   gst_quiclib_common_install_endpoint_properties (gobject_class);
 
+  g_object_class_install_property (gobject_class, PROP_QUIC_CONNECTION_CTX,
+      g_param_spec_pointer ("quic-ctx", "QUIC Transport Context",
+          "Underlying QUIC transport context", G_PARAM_READABLE));
+
   signals[GST_QUICLIB_HANDSHAKE_COMPLETE_SIGNAL] =
     gst_quiclib_handshake_complete_signal_new (klass);
   signals[GST_QUICLIB_STREAM_OPENED_SIGNAL] =
@@ -364,10 +369,9 @@ gst_quicsink_get_property (GObject * object, guint prop_id,
             "Cannot get server property %s in client mode", pspec->name);
       }
       break;
-    /*case PROP_ENDPOINT_ENUMS:
-      gst_quiclib_common_get_endpoint_property_checked (sink, tctx, pspec,
-          prop_id, value);
-      break;*/
+    case PROP_QUIC_CONNECTION_CTX:
+      g_value_set_pointer (value, (gpointer) sink->conn);
+      break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
       break;

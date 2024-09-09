@@ -89,6 +89,7 @@ typedef enum _GstQUICMode {
 #define QUICLIB_MAX_DATA_DEFAULT GST_QUICLIB_VARINT_MAX
 #define QUICLIB_ENABLE_DATAGRAM_DEFAULT FALSE
 #define QUICLIB_SEND_DATAGRAMS_DEFAULT FALSE
+#define QUICLIB_ENABLE_STATS_DEFAULT TRUE
 
 #define QUICLIB_CONTEXT_MODE "quic-ctx-mode"
 #define QUICLIB_CLIENT_CONNECT "quic-conn-connect"
@@ -105,6 +106,7 @@ typedef enum _GstQUICMode {
 #define QUICLIB_STREAM_TYPE "quic-stream-type"
 #define QUICLIB_STREAM_STATE "quic-stream-state"
 #define QUICLIB_DATAGRAM "quic-datagram"
+#define QUICLIB_STATS "quic-stats"
 
 
 #define GST_QUICLIB_COMMON_USER_TYPE gst_quiclib_common_user_get_type ()
@@ -317,7 +319,8 @@ void gst_quiclib_address_list_free (GstQuicLibAddressList *l);
   PROP_MAX_DATA_LOCAL, \
   PROP_MAX_DATA_REMOTE, \
   PROP_ENABLE_DATAGRAM, \
-  PROP_SEND_DATAGRAMS
+  PROP_SEND_DATAGRAMS, \
+  PROP_ENABLE_STATS
 
 #define PROP_QUIC_ENDPOINT_SERVER_ENUMS \
   PROP_ALPN, \
@@ -367,7 +370,8 @@ void gst_quiclib_address_list_free (GstQuicLibAddressList *l);
   case PROP_MAX_DATA_LOCAL: \
   case PROP_MAX_DATA_REMOTE: \
   case PROP_ENABLE_DATAGRAM: \
-  case PROP_SEND_DATAGRAMS
+  case PROP_SEND_DATAGRAMS: \
+  case PROP_ENABLE_STATS
 
 #define PROP_QUIC_ENDPOINT_SERVER_ENUM_CASES PROP_PRIVKEY_LOCATION: \
   case PROP_CERT_LOCATION: \
@@ -395,7 +399,8 @@ void gst_quiclib_address_list_free (GstQuicLibAddressList *l);
   guint64 max_stream_data_uni_remote_init; \
   guint64 max_data_remote_init; \
   gboolean enable_datagram; \
-  gboolean send_datagrams;
+  gboolean send_datagrams; \
+  gboolean enable_stats;
 
 #define gst_quiclib_common_init_endpoint_properties(inst) \
   do { \
@@ -412,6 +417,7 @@ void gst_quiclib_address_list_free (GstQuicLibAddressList *l);
     inst->max_data_remote_init = QUICLIB_MAX_DATA_DEFAULT; \
     inst->enable_datagram = QUICLIB_ENABLE_DATAGRAM_DEFAULT; \
     inst->send_datagrams = QUICLIB_SEND_DATAGRAMS_DEFAULT; \
+    inst->enable_stats = QUICLIB_ENABLE_STATS_DEFAULT; \
   } while (0);
 
 #define gst_quiclib_common_install_endpoint_properties(klass) \
@@ -440,6 +446,7 @@ void gst_quiclib_address_list_free (GstQuicLibAddressList *l);
     gst_quiclib_common_install_max_data_remote_property (klass); \
     gst_quiclib_common_install_enable_datagram_property (klass); \
     gst_quiclib_common_install_send_datagrams_property (klass); \
+    gst_quiclib_common_install_enable_stats_property (klass); \
   } while (0); \
 
 #define PROP_LOCATION_SHORT "location"
@@ -659,6 +666,15 @@ void gst_quiclib_address_list_free (GstQuicLibAddressList *l);
             "Connection peer has expressed support for receiving QUIC " \
             "DATAGRAMs", QUICLIB_SEND_DATAGRAMS_DEFAULT, G_PARAM_READABLE));
 
+#define PROP_ENABLE_STATS_SHORTNAME "enable-stats"
+#define gst_quiclib_common_install_enable_stats_property(klass) \
+    g_object_class_install_property (klass, PROP_ENABLE_STATS, \
+        g_param_spec_boolean (PROP_ENABLE_STATS_SHORTNAME, \
+            "Enable QUIC transport connection statistics", \
+            "Log QUIC transport connection statistics and allow them to be " \
+            "queried using the gst_quiclib_transport_get_conn_stats API call", \
+            QUICLIB_ENABLE_STATS_DEFAULT, G_PARAM_READWRITE));
+
 #define gst_quiclib_common_set_endpoint_property_checked( \
     obj, tctx, pspec, prop_id, value) \
   do { \
@@ -723,6 +739,9 @@ void gst_quiclib_address_list_free (GstQuicLibAddressList *l);
         break; \
       case PROP_ENABLE_DATAGRAM: \
         obj->enable_datagram = g_value_get_boolean (value); \
+        break; \
+      case PROP_ENABLE_STATS: \
+        obj->enable_stats = g_value_get_boolean (value); \
         break; \
       /* Read-only properties start */ \
       case PROP_MAX_STREAMS_BIDI_LOCAL: \
@@ -793,6 +812,9 @@ void gst_quiclib_address_list_free (GstQuicLibAddressList *l);
           break; \
         case PROP_ENABLE_DATAGRAM: \
           g_value_set_boolean (value, obj->enable_datagram); \
+          break; \
+        case PROP_ENABLE_STATS: \
+          g_value_set_boolean (value, obj->enable_stats); \
           break; \
         default: \
           GST_DEBUG_OBJECT (obj, "Property %s unavailable when there is " \

@@ -68,6 +68,9 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <time.h>
+#include <sys/time.h>
+#include <linux/net.h>
 
 GST_DEBUG_CATEGORY_STATIC (quiclib_transport);  // define category (statically)
 #define GST_CAT_DEFAULT quiclib_transport       // set as default
@@ -417,6 +420,112 @@ socket_control_message_pktinfo_deserialise (int level, int type, gsize size,
   return msg;
 }
 
+#define SOCKET_CONTROL_MESSAGE_TIMESTAMP_TYPE socket_control_message_timestamp_get_type ()
+G_DECLARE_FINAL_TYPE (SocketControlMessageTimestamp,
+    socket_control_message_timestamp, SOCKET_CONTROL_MESSAGE, TIMESTAMP,
+    GSocketControlMessage);
+
+struct _SocketControlMessageTimestamp {
+  GSocketControlMessage parent;
+
+  struct timespec timestamp;
+};
+
+G_DEFINE_TYPE (SocketControlMessageTimestamp, socket_control_message_timestamp,
+    G_TYPE_SOCKET_CONTROL_MESSAGE);
+    
+static void socket_control_message_timestamp_set_property (GObject *object,
+    guint prop_id, const GValue *value, GParamSpec *pspec);
+static void socket_control_message_timestamp_get_property (GObject *object,
+    guint prop_id, GValue *value, GParamSpec *pspec);
+GSocketControlMessage *socket_control_message_timestamp_deserialise (int level,
+    int type, gsize size, gpointer data);
+
+enum {
+  PROP_TIMESTAMP_0,
+  PROP_TIMESTAMP_NS,
+  PROP_TIMESTAMP_FP
+};
+
+static void
+socket_control_message_timestamp_class_init (
+    SocketControlMessageTimestampClass *klass)
+{
+  GObjectClass *gobject_class = G_OBJECT_CLASS (klass);
+  GSocketControlMessageClass *scmclass = G_SOCKET_CONTROL_MESSAGE_CLASS (klass);
+
+  gobject_class->set_property = socket_control_message_timestamp_set_property;
+  gobject_class->get_property = socket_control_message_timestamp_get_property;
+  scmclass->deserialize = socket_control_message_timestamp_deserialise;
+
+  g_object_class_install_property (gobject_class, PROP_TIMESTAMP_NS,
+      g_param_spec_uint64 ("timestamp-ns", "Timestamp (nanosecond)",
+          "Timestamp value as an integer number of nanoseconds", 0, G_MAXUINT64,
+          0, G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY));
+}
+
+static void
+socket_control_message_timestamp_init (SocketControlMessageTimestamp *tsscm)
+{
+  tsscm->timestamp.tv_sec = 0;
+  tsscm->timestamp.tv_nsec = 0;
+}
+
+static void
+socket_control_message_timestamp_set_property (GObject *object, guint prop_id,
+    const GValue *value, GParamSpec *pspec)
+{
+  SocketControlMessageTimestamp *tsscm =
+      SOCKET_CONTROL_MESSAGE_TIMESTAMP (object);
+
+  switch (prop_id) {
+    case PROP_TIMESTAMP_NS:
+      tsscm->timestamp.tv_sec = g_value_get_uint64 (value) / 1000000000;
+      tsscm->timestamp.tv_nsec = g_value_get_uint64 (value) % 1000000000;
+      break;
+    default:
+      G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+  }
+}
+
+static void
+socket_control_message_timestamp_get_property (GObject *object, guint prop_id,
+    GValue *value, GParamSpec *pspec)
+{
+  SocketControlMessageTimestamp *tsscm =
+      SOCKET_CONTROL_MESSAGE_TIMESTAMP (object);
+
+  switch (prop_id) {
+    case PROP_TIMESTAMP_NS:
+      g_value_set_uint64 (value,
+          (tsscm->timestamp.tv_sec * 1000000000) + tsscm->timestamp.tv_nsec);
+      break;
+    default:
+      G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
+  }
+}
+
+GSocketControlMessage *
+socket_control_message_timestamp_deserialise (int level, int type, gsize size,
+    gpointer data)
+{
+  if (level != SOL_SOCKET) return NULL;
+
+  if (type == SCM_TIMESTAMP) {
+    struct timeval *tv = (struct timeval *) data;
+    return g_object_new (SOCKET_CONTROL_MESSAGE_TIMESTAMP_TYPE,
+        "timestamp-ns", (tv->tv_sec * 1000000000) + (tv->tv_usec * 1000), NULL);
+  }
+
+  if (type == SCM_TIMESTAMPNS) {
+    struct timespec *ts = (struct timespec *) data;
+    return g_object_new (SOCKET_CONTROL_MESSAGE_TIMESTAMP_TYPE,
+        "timestamp-ns", (ts->tv_sec * 1000000000) + ts->tv_nsec, NULL);
+  }
+
+  return NULL;
+}
+
 typedef struct _GstQuicLibTransportBufWatchSource {
   GSource parent;
 
@@ -454,6 +563,8 @@ struct _GstQuicLibTransportContextPrivate {
   GstQuicLibTransportParameters tp_sent;
 
   GRecMutex rmutex;
+
+  gboolean enable_stats;
 };
 
 typedef struct _GstQuicLibTransportContextPrivate
@@ -529,6 +640,7 @@ gst_quiclib_transport_context_class_init (
   gst_quiclib_common_install_max_streams_uni_local_property (gobject_class);
   gst_quiclib_common_install_max_streams_uni_remote_property (gobject_class);
   gst_quiclib_common_install_enable_datagram_property (gobject_class);
+  gst_quiclib_common_install_enable_stats_property (gobject_class);
 
   g_object_class_install_property (gobject_class,
       PROP_TRANSPORT_CONTEXT_DEFAULT_NUM_CIDS,
@@ -538,6 +650,7 @@ gst_quiclib_transport_context_class_init (
 
   g_type_ensure (SOCKET_CONTROL_MESSAGE_ECN_TYPE);
   g_type_ensure (SOCKET_CONTROL_MESSAGE_PKTINFO_TYPE);
+  g_type_ensure (SOCKET_CONTROL_MESSAGE_TIMESTAMP_TYPE);
 
   GST_DEBUG_CATEGORY_INIT (quiclib_transport, "quictransport", 0,
       "Base class for QUIC Transport");
@@ -561,7 +674,7 @@ gst_quiclib_transport_context_init (GstQuicLibTransportContext *self)
   priv->timeout_id = 0;
   priv->socket_serv = NULL;
   priv->location = g_strdup (QUICLIB_LOCATION_DEFAULT);
-
+  priv->enable_stats = TRUE;
 
   priv->tp_sent.max_data = QUICLIB_MAX_DATA_DEFAULT;
   priv->tp_sent.max_stream_data_bidi = QUICLIB_MAX_STREAM_DATA_DEFAULT;
@@ -632,6 +745,7 @@ static void gst_quiclib_transport_context_set_property (GObject * object,
   case PROP_MAX_STREAM_DATA_UNI_LOCAL:
   case PROP_MAX_STREAMS_BIDI_LOCAL:
   case PROP_MAX_STREAMS_UNI_LOCAL:
+  case PROP_ENABLE_STATS:
     g_critical ("Attempted to set read-only parameter: %s", pspec->name);
     /* no break */
   default:
@@ -691,6 +805,9 @@ static void gst_quiclib_transport_context_get_property (GObject * object,
     break;
   case PROP_ENABLE_DATAGRAM:
     g_value_set_boolean (value, priv->tp_sent.enable_datagrams);
+    break;
+  case PROP_ENABLE_STATS:
+    g_value_set_boolean (value, priv->enable_stats);
     break;
   default:
     G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -1251,6 +1368,23 @@ typedef struct {
   guint64 offset;
 } GstQuicLibTransportAckCallbackSource;
 
+typedef struct {
+  guint64 timestamp_ns;
+  gsize bytes;
+} GstQuicLibPacketStats;
+
+typedef struct {
+  struct {
+    guint64 sent;
+    guint64 received;
+    guint64 rtx;
+  } pkt_counts;
+
+  GMutex mutex;
+  GList *bytes_received;
+  GList *bytes_sent;
+} GstQuicLibConnStatsTrackers;
+
 struct _GstQuicLibTransportConnection {
   GstQuicLibTransportContext parent;
 
@@ -1297,6 +1431,8 @@ struct _GstQuicLibTransportConnection {
 
   GMutex mutex;
   GCond cond;
+
+  GstQuicLibConnStatsTrackers stats;
 };
 
 struct _GstQuicLibStreamContext {
@@ -1581,6 +1717,8 @@ gst_quiclib_transport_connection_init (GstQuicLibTransportConnection *self)
 
   g_mutex_init (&self->mutex);
   g_cond_init (&self->cond);
+  memset (&self->stats, 0, sizeof (GstQuicLibConnStatsTrackers));
+  g_mutex_init (&self->stats.mutex);
 }
 
 static void
@@ -1656,6 +1794,15 @@ gst_quiclib_transport_connection_finalise (GstQuicLibTransportConnection *self)
     SSL_CTX_free (self->ssl_ctx);
     self->ssl_ctx = NULL;
   }
+
+  g_mutex_lock (&self->stats.mutex);
+  if (self->stats.bytes_received) {
+    g_list_free_full (self->stats.bytes_received, g_free);
+  }
+  if (self->stats.bytes_sent) {
+    g_list_free_full (self->stats.bytes_sent, g_free);
+  }
+  g_mutex_unlock (&self->stats.mutex);
 
   GST_DEBUG_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (self), "Done finalizing");
 }
@@ -2900,6 +3047,21 @@ quiclib_set_timer (GstQuicLibTransportContext *ctx, GSourceFunc cb,
   return TRUE;
 }
 
+void
+_quiclib_add_stat (GstQuicLibTransportConnection *conn, GList **list,
+    GstQuicLibPacketStats *stat)
+{
+  g_mutex_lock (&conn->stats.mutex);
+  while (*list && stat->timestamp_ns >
+      (((GstQuicLibPacketStats *) (*list)->data)->timestamp_ns + 1000000000)) {
+    g_free ((*list)->data);
+    *list = g_list_delete_link (*list, *list);
+  }
+
+  *list = g_list_append (*list, stat);
+  g_mutex_unlock (&conn->stats.mutex);
+}
+
 gssize
 quiclib_packet_write (GstQuicLibTransportConnection *conn, const gchar *data,
     gsize nwrite, ngtcp2_path_storage *ps)
@@ -2932,6 +3094,25 @@ quiclib_packet_write (GstQuicLibTransportConnection *conn, const gchar *data,
         quiclib_rawcidtostr (vc.scid, vc.scidlen, scid_str));
 
     g_free (peer_addr_str);
+  }
+
+  if (written > 0) {
+    GstQuicLibTransportContextPrivate *priv =
+      gst_quiclib_transport_context_get_instance_private (
+        GST_QUICLIB_TRANSPORT_CONTEXT (conn));
+    
+    if (priv->enable_stats) {
+      struct timespec ts;
+      GstQuicLibPacketStats *stat = g_new (GstQuicLibPacketStats, 1);
+
+      clock_gettime (CLOCK_REALTIME, &ts);
+      stat->bytes = (gsize) written;
+      stat->timestamp_ns = (ts.tv_sec * 1000000000) + ts.tv_nsec;
+
+      _quiclib_add_stat (conn, &conn->stats.bytes_sent, stat);
+    }
+
+    conn->stats.pkt_counts.sent++;
   }
 
   g_object_unref (gsa);
@@ -3245,6 +3426,7 @@ gst_quiclib_new_conn_from_server (GstQuicLibServerContext *server)
   conn_priv->loop = server_priv->loop;
   conn_priv->loop_context = server_priv->loop_context;
   conn_priv->loop_thread = server_priv->loop_thread;
+  conn_priv->enable_stats = server_priv->enable_stats;
 
   conn->transport_params.initial_max_data = server_priv->tp_sent.max_data;
   conn->transport_params.initial_max_stream_data_bidi_local =
@@ -3295,6 +3477,7 @@ quiclib_data_received (GSocket *socket, GIOCondition condition,
     GInputVector ivec;
     guint8 buf[MAX_UDP];
     GSocketControlMessage **msgs;
+    GstQuicLibPacketStats *stat = NULL;
     gint i, num_msgs, flags = G_SOCKET_MSG_NONE;
 
     int rv;
@@ -3326,6 +3509,9 @@ quiclib_data_received (GSocket *socket, GIOCondition condition,
       break;
     }
 
+    GST_FIXME_OBJECT (socket_ctx->owner, "bytes_read: %ld, num_msgs: %d",
+        bytes_read, num_msgs);
+
     for (i = 0; i < num_msgs; i++) {
       if (SOCKET_CONTROL_MESSAGE_IS_ECN (msgs[i])) {
         SocketControlMessageECN *ecn_scm =
@@ -3348,6 +3534,20 @@ quiclib_data_received (GSocket *socket, GIOCondition condition,
 
           g_object_unref (sa);
         }
+      } else if (SOCKET_CONTROL_MESSAGE_IS_TIMESTAMP (msgs [i])) {
+        guint64 ts;
+        SocketControlMessageTimestamp *timestamp =
+            SOCKET_CONTROL_MESSAGE_TIMESTAMP (msgs [i]);
+
+        g_object_get (timestamp, "timestamp-ns", &ts, NULL);
+
+        GST_FIXME_OBJECT (socket_ctx->owner,
+            "New packet stat with %ld bytes read at timestamp %lu", bytes_read,
+            ts);
+
+        stat = g_new (GstQuicLibPacketStats, 1);
+        stat->bytes = (gsize) bytes_read;
+        stat->timestamp_ns = ts;
       }
 
       g_object_unref (msgs[i]);
@@ -3589,6 +3789,11 @@ quiclib_data_received (GSocket *socket, GIOCondition condition,
       conn = GST_QUICLIB_TRANSPORT_CONNECTION (socket_ctx->owner);
     }
 
+    if (stat) {
+      _quiclib_add_stat (conn, &conn->stats.bytes_received, stat);
+    }
+    conn->stats.pkt_counts.received++;
+
     if (ngtcp2_conn_in_closing_period (conn->quic_conn)) {
       gchar *debug_remote_addr = g_socket_connectable_to_string (
           G_SOCKET_CONNECTABLE (peer_addr));
@@ -3709,6 +3914,15 @@ quiclib_open_socket (GstQuicLibTransportContext *ctx, GSocketAddress *addr)
     break;
   default:
     g_assert (fam == G_SOCKET_FAMILY_IPV4 || fam == G_SOCKET_FAMILY_IPV6);
+  }
+
+  if (priv->enable_stats) {
+    GST_FIXME_OBJECT (ctx, "Enabling packet reception timestamps!");
+    if (!g_socket_set_option (socket, SOL_SOCKET, SO_TIMESTAMPNS, 1, &err)) {
+      GST_WARNING_OBJECT (ctx,
+          "Couldn't enable the timestamp option for incoming sockets: %s",
+          err->message);
+    }
   }
 
   g_socket_set_blocking (socket, FALSE);
@@ -5113,4 +5327,55 @@ gst_quiclib_transport_user_get_type (void)
     g_once_init_leave (&type, _type);
   }
   return type;
+}
+
+gboolean
+gst_quiclib_transport_get_conn_stats (GstQuicLibTransportConnection *conn,
+  GstQuicLibConnStats *conn_stats)
+{
+  ngtcp2_conn_info cinfo;
+  const ngtcp2_info *info;
+  struct timespec ts;
+  guint64 one_sec_ago;
+  guint64 receive_bps = 0;
+  guint64 send_bps = 0;
+  GList *it;
+
+  if (conn == NULL || conn_stats == NULL) {
+    return FALSE;
+  }
+
+  clock_gettime (CLOCK_REALTIME, &ts);
+  one_sec_ago = (ts.tv_sec * 1000000000) + ts.tv_nsec - 1000000000;
+
+  g_mutex_lock (&conn->stats.mutex);
+  for (it = conn->stats.bytes_received; it != NULL; it = it->next) {
+    if (((GstQuicLibPacketStats *) it->data)->timestamp_ns > one_sec_ago) {
+      receive_bps += ((GstQuicLibPacketStats *) it->data)->bytes;
+    }
+  }
+
+  for (it = conn->stats.bytes_sent; it != NULL; it = it->next) {
+    if (((GstQuicLibPacketStats *) it->data)->timestamp_ns > one_sec_ago) {
+      send_bps += ((GstQuicLibPacketStats *) it->data)->bytes;
+    }
+  }
+  g_mutex_unlock (&conn->stats.mutex);
+
+  info = ngtcp2_version (0);
+
+  ngtcp2_conn_get_conn_info (conn->quic_conn, &cinfo);
+  conn_stats->bytes_in_flight = cinfo.bytes_in_flight;
+  conn_stats->cwnd = cinfo.cwnd;
+  conn_stats->quic_implementation = "ngtcp2";
+  conn_stats->quic_implementation_version = info->version_str;
+  conn_stats->rate.receive = receive_bps * 8;
+  conn_stats->rate.send = send_bps * 8;
+  conn_stats->rtt.meandev = cinfo.rttvar;
+  conn_stats->rtt.min = cinfo.min_rtt;
+  conn_stats->rtt.smoothed = cinfo.smoothed_rtt;
+  conn_stats->pkt_counts.sent = conn->stats.pkt_counts.sent;
+  conn_stats->pkt_counts.received = conn->stats.pkt_counts.received;
+
+  return TRUE;
 }
