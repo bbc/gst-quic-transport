@@ -553,6 +553,11 @@ struct _GstQuicLibTransportContextPrivate {
   GMainLoop *loop;
   GMainContext *loop_context;
   GThread *loop_thread;
+
+  GMainLoop *async_notif_loop;
+  GMainContext *async_notif_loop_context;
+  GThread *async_notif_thread;
+
   GSource *timeout;
   guint timeout_id;
   GSocketService *socket_serv;
@@ -594,6 +599,17 @@ quiclib_transport_context_loop_thread (gpointer user_data)
       (GstQuicLibTransportContextPrivate *) (user_data);
 
   g_main_loop_run (priv->loop);
+
+  return NULL;
+}
+
+gpointer
+quiclib_transport_async_notif_context_loop_thread (gpointer user_data)
+{
+  GstQuicLibTransportContextPrivate *priv =
+      (GstQuicLibTransportContextPrivate *) (user_data);
+
+  g_main_loop_run (priv->async_notif_loop);
 
   return NULL;
 }
@@ -670,6 +686,9 @@ gst_quiclib_transport_context_init (GstQuicLibTransportContext *self)
   priv->loop_context = NULL;
   priv->loop = NULL;
   priv->loop_thread = NULL;
+  priv->async_notif_loop_context = NULL;
+  priv->async_notif_loop = NULL;
+  priv->async_notif_thread = NULL;
   priv->timeout = NULL;
   priv->timeout_id = 0;
   priv->socket_serv = NULL;
@@ -1068,6 +1087,23 @@ gst_quiclib_transport_context_kill_thread (GstQuicLibTransportContext *ctx)
   p->loop_context = NULL;
 
   p->loop_thread = NULL;
+
+  g_main_loop_quit (p->async_notif_loop);
+  g_main_loop_unref (p->async_notif_loop);
+
+  if (g_thread_self () == p->async_notif_thread) {
+    g_thread_exit (NULL);
+  } else {
+    g_thread_join (p->async_notif_thread);
+  }
+
+  g_thread_unref (p->async_notif_thread);
+
+  g_main_context_unref (p->async_notif_loop_context);
+
+  p->async_notif_loop = NULL;
+  p->async_notif_loop_context = NULL;
+  p->async_notif_thread = NULL;
 }
 
 #define quiclib
@@ -1441,9 +1477,21 @@ struct _GstQuicLibStreamContext {
   gsize last_offset;
 
   GList *ack_bufs;
+
+  GMutex mutex;
 };
 
 typedef struct _GstQuicLibStreamContext GstQuicLibStreamContext;
+
+static void
+quiclib_stream_context_destroy (gpointer ctx)
+{
+  GstQuicLibStreamContext *stream = (GstQuicLibStreamContext *) ctx;
+
+  g_mutex_clear (&stream->mutex);
+
+  g_free (stream);
+}
 
 G_DEFINE_TYPE (GstQuicLibTransportConnection, gst_quiclib_transport_connection,
     GST_TYPE_QUICLIB_TRANSPORT_CONTEXT);
@@ -1703,7 +1751,7 @@ gst_quiclib_transport_connection_init (GstQuicLibTransportConnection *self)
   self->ssl_ctx = NULL;
   self->ssl = NULL;
   self->streams = g_hash_table_new_full (g_int64_hash, g_int64_equal,
-      quiclib_hash_key_destroy, g_free);
+      quiclib_hash_key_destroy, quiclib_stream_context_destroy);
   self->datagrams_awaiting_ack = g_hash_table_new_full (g_int64_hash,
       g_int64_equal, g_free, (GDestroyNotify) gst_buffer_unref);
   ngtcp2_ccerr_default (&self->last_error);
@@ -2348,7 +2396,7 @@ _quiclib_transport_run_handshake_complete_callback (
   hc_source->source.type = CB_HANDSHAKE_COMPLETED;
   hc_source->source.conn = conn;
 
-  g_source_attach ((GSource *) hc_source, priv->loop_context);
+  g_source_attach ((GSource *) hc_source, priv->async_notif_loop_context);
 }
 
 void
@@ -2368,7 +2416,7 @@ _quiclib_transport_run_stream_id_callback (GstQuicLibTransportConnection *conn,
   sid_source->source.type = type;
   sid_source->source.conn = conn;
 
-  g_source_attach ((GSource *) sid_source, priv->loop_context);
+  g_source_attach ((GSource *) sid_source, priv->async_notif_loop_context);
 }
 
 #define _quiclib_transport_run_stream_open_callback(conn, stream_id) \
@@ -2399,7 +2447,7 @@ _quiclib_transport_run_ack_callback (GstQuicLibTransportConnection *conn,
       (stream_id > QUICLIB_VARINT_MAX)?(CB_DATAGRAM_ACK):(CB_STREAM_ACK);
   ack_source->source.conn = conn;
 
-  g_source_attach ((GSource *) ack_source, priv->loop_context);
+  g_source_attach ((GSource *) ack_source, priv->async_notif_loop_context);
 }
 
 int
@@ -2555,6 +2603,8 @@ quiclib_ngtcp2_ack_stream (ngtcp2_conn *quic_conn, int64_t stream_id,
         "Received ACK for stream %ld, for %lu bytes at offset %lu", stream_id,
         datalen, offset);
 
+  g_mutex_lock (&stream->mutex);
+
   bufs = g_list_first (stream->ack_bufs);
   while (bufs != NULL) {
     GstBuffer *sent_buf = (GstBuffer *) bufs->data;
@@ -2579,7 +2629,10 @@ quiclib_ngtcp2_ack_stream (ngtcp2_conn *quic_conn, int64_t stream_id,
   }
 
   if (stream->state == QUIC_STREAM_CLOSED_BOTH && stream->ack_bufs == NULL) {
-    g_free (stream);
+    g_mutex_unlock (&stream->mutex);
+    quiclib_stream_context_destroy ((gpointer) stream);
+  } else {
+    g_mutex_unlock (&stream->mutex);
   }
 
   return 0;
@@ -2625,6 +2678,8 @@ quiclib_alloc_stream_context (GstQuicLibTransportConnection *conn,
 {
   gboolean rv;
   GstQuicLibStreamContext *stream = g_new0 (GstQuicLibStreamContext, 1);
+
+  g_mutex_init (&stream->mutex);
 
   stream->state = QUIC_STREAM_OPEN;
   if ((conn->server && QUICLIB_STREAM_IS_UNI_CLIENT (stream_id)) ||
@@ -2760,9 +2815,13 @@ quiclib_ngtcp2_on_stream_close (ngtcp2_conn *quic_conn, uint32_t flags,
   }
 #endif
 
+  g_mutex_lock (&stream->mutex);
   stream->state = QUIC_STREAM_CLOSED_BOTH;
   if (stream->ack_bufs == NULL) {
+    g_mutex_unlock (&stream->mutex);
     g_hash_table_remove (conn->streams, &stream_id);
+  } else {
+    g_mutex_unlock (&stream->mutex);
   }
 
   return 0;
@@ -2799,9 +2858,9 @@ quiclib_ngtcp2_on_stream_reset (ngtcp2_conn *quic_conn, int64_t stream_id,
   }
 #endif
 
+  g_mutex_lock (&stream->mutex);
   stream->state = QUIC_STREAM_CLOSED_BOTH;
-  if (stream->ack_bufs == NULL) {
-  }
+  g_mutex_unlock (&stream->mutex);
 
   return 0;
 }
@@ -3427,6 +3486,9 @@ gst_quiclib_new_conn_from_server (GstQuicLibServerContext *server)
   conn_priv->loop_context = server_priv->loop_context;
   conn_priv->loop_thread = server_priv->loop_thread;
   conn_priv->enable_stats = server_priv->enable_stats;
+  conn_priv->async_notif_loop = server_priv->async_notif_loop;
+  conn_priv->async_notif_loop_context = server_priv->async_notif_loop_context;
+  conn_priv->async_notif_thread = server_priv->async_notif_thread;
 
   conn->transport_params.initial_max_data = server_priv->tp_sent.max_data;
   conn->transport_params.initial_max_stream_data_bidi_local =
@@ -3966,6 +4028,12 @@ quiclib_open_socket (GstQuicLibTransportContext *ctx, GSocketAddress *addr)
   priv->loop = g_main_loop_new (priv->loop_context, FALSE);
   priv->loop_thread = g_thread_new ("quiclib-transport",
       quiclib_transport_context_loop_thread, priv);
+
+  priv->async_notif_loop_context = g_main_context_new ();
+  priv->async_notif_loop = g_main_loop_new (priv->async_notif_loop_context,
+      FALSE);
+  priv->async_notif_thread = g_thread_new ("quiclib-async",
+      quiclib_transport_async_notif_context_loop_thread, priv);
 
   /*
    * So this takes a GSourceFunc argument, which carries a single argument, but
@@ -5155,7 +5223,9 @@ _quiclib_transport_store_ack_bufs (GstQuicLibTransportConnection *conn,
       GST_PTR_FORMAT " of size %lu from original %lu with offset %lu", store,
       size, gst_buffer_get_size (buf), buf->offset);
 
+  g_mutex_lock (&stream->mutex);
   stream->ack_bufs = g_list_append (stream->ack_bufs, (gpointer) store);
+  g_mutex_unlock (&stream->mutex);
 
   return stream->ack_bufs != NULL;
 }
