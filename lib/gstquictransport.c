@@ -5243,6 +5243,7 @@ gst_quiclib_transport_send_stream (GstQuicLibTransportConnection *conn,
   GstQuicLibStreamContext *stream;
   GstQuicLibStreamMeta *meta = gst_buffer_get_quiclib_stream_meta (buf);
   gsize buf_size = gst_buffer_get_size (buf);
+  guint64 max_stream_data;
 
   if (stream_id < 0 && meta != NULL) {
     stream_id = meta->stream_id;
@@ -5250,8 +5251,23 @@ gst_quiclib_transport_send_stream (GstQuicLibTransportConnection *conn,
 
   g_return_val_if_fail (stream_id >= 0, -1);
 
+  if (stream_id & 0x2) {
+    max_stream_data = ngtcp2_conn_get_remote_transport_params (conn->quic_conn)
+        ->initial_max_stream_data_uni;
+  } else if ((stream_id & 0x1 && conn->server) ||
+            !(conn->server || stream_id & 0x01)) {
+    max_stream_data = ngtcp2_conn_get_remote_transport_params (conn->quic_conn)
+        ->initial_max_stream_data_bidi_remote;
+  } else {
+    max_stream_data = ngtcp2_conn_get_remote_transport_params (conn->quic_conn)
+        ->initial_max_stream_data_bidi_local;
+  }
+
   GST_DEBUG_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn),
-      "Received %lu bytes for stream %lu", buf_size, stream_id);
+      "Received %lu bytes to send on stream %lu with %lu bytes stream data "
+      "remaining of %lu", buf_size, stream_id,
+      ngtcp2_conn_get_max_stream_data_left (conn->quic_conn, stream_id),
+      max_stream_data);
 
   /*quiclib_transport_print_buffer (GST_QUICLIB_TRANSPORT_CONTEXT (conn), buf);*/
 
@@ -5304,7 +5320,9 @@ gst_quiclib_transport_send_stream (GstQuicLibTransportConnection *conn,
          * TODO: Is it worth having the end time be configurable? 100ms is very
          * much a finger-in-the-air value to stop it busy waiting.
          */
-        end_time = g_get_monotonic_time () + 100 * G_TIME_SPAN_MILLISECOND;
+        end_time = g_get_monotonic_time () + (100 * G_TIME_SPAN_MILLISECOND);
+        GST_DEBUG_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn),
+            "No congestion window left, waiting until %lu", end_time);
         g_cond_wait_until (&conn->cond, &conn->mutex, end_time);
       }
 
