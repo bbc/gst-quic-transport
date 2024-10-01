@@ -110,7 +110,7 @@ quicsink_sources = [
 gstquicsink = library('gstquicsink',
   quicsink_sources,
   c_args : plugin_c_args,
-  dependencies : [gst_dep, gstbase_dep, quiclib_dep, gio_dep, quicutils_dep],
+  dependencies : [gst_dep, gstbase_dep, quiclib_dep, gio_dep, quicutils_dep, quicstream_dep],
   install : true,
   install_dir : plugins_install_dir,
 )

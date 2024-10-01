@@ -70,6 +70,7 @@
 #include "gstquicsink.h"
 #include "gstquictransport.h"
 #include "gstquicsignals.h"
+#include "gstquicstream.h"
 
 GST_DEBUG_CATEGORY_STATIC (gst_quicsink_debug);
 #define GST_CAT_DEFAULT gst_quicsink_debug
@@ -649,13 +650,39 @@ gst_quicsink_render (GstBaseSink * sink, GstBuffer * buffer)
       g_mutex_unlock (&quicsink->mutex);
       switch (err) {
         case GST_QUICLIB_ERR:
-        case GST_QUICLIB_ERR_STREAM_ID_BLOCKED:
-        case GST_QUICLIB_ERR_STREAM_DATA_BLOCKED:
           return GST_FLOW_ERROR;
         case GST_QUICLIB_ERR_CONN_DATA_BLOCKED:
           return GST_FLOW_QUIC_BLOCKED;
+        case GST_QUICLIB_ERR_STREAM_ID_BLOCKED:
+        case GST_QUICLIB_ERR_STREAM_DATA_BLOCKED:
         case GST_QUICLIB_ERR_STREAM_CLOSED:
+        {
+          GstQuicLibStreamMeta *stream_meta =
+              gst_buffer_get_quiclib_stream_meta (buffer);
+
+          g_assert (stream_meta);
+
+          switch (err) {
+            case GST_QUICLIB_ERR_STREAM_ID_BLOCKED:
+              GST_ERROR_OBJECT (quicsink, "Could not send buffer of size %lu"
+                  "on stream ID %lu, stream ID is blocked by MAX_%s_STREAMS",
+                  buf_size, stream_meta->stream_id,
+                  (stream_meta->stream_id & 0x2)?("UNI"):("BIDI"));
+              return GST_FLOW_ERROR;
+            case GST_QUICLIB_ERR_STREAM_DATA_BLOCKED:
+              GST_ERROR_OBJECT (quicsink, "Could not send buffer of size %lu "
+                  "on stream ID %lu, stream blocked by flow control", buf_size,
+                  stream_meta->stream_id);
+              return GST_FLOW_ERROR;
+            case GST_QUICLIB_ERR_STREAM_CLOSED:
+              GST_ERROR_OBJECT (quicsink, "Could not send buffer of size %lu "
+                  "on stream ID %ld, stream closed for writing", buf_size,
+                  stream_meta->stream_id);
+              break;
+            default:
+          }
           return GST_FLOW_QUIC_STREAM_CLOSED;
+        }
         case GST_QUICLIB_ERR_PACKET_NUM_EXHAUSTED:
           GST_ERROR_OBJECT (quicsink, "QUIC connection has exhausted its "
               "packet number space, this connection is done!");
