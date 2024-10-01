@@ -1669,6 +1669,7 @@ static void gst_quiclib_transport_connection_get_property (GObject * object,
           ngtcp2_conn_get_remote_transport_params (conn->quic_conn);
       
       g_value_set_boolean (value, tp->max_datagram_frame_size > 0);
+      break;
     }
     default:
       G_OBJECT_CLASS (gst_quiclib_transport_connection_parent_class)->
