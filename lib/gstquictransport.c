@@ -5294,6 +5294,9 @@ gst_quiclib_transport_send_stream (GstQuicLibTransportConnection *conn,
           "quiclib_ngtcp2_conn_write returned error %s",
           gst_quiclib_error_as_string((GstQuicLibError) _b_written));
       rv = _b_written;
+      if (_b_written == GST_QUICLIB_ERR_STREAM_CLOSED) {
+        stream = NULL;
+      }
       break;
     }
 
@@ -5349,8 +5352,10 @@ gst_quiclib_transport_send_stream (GstQuicLibTransportConnection *conn,
 
   quiclib_buffer_unmap (&maps);
 
-  stream->last_offset += (gsize) _bytes_written;
-  _quiclib_transport_store_ack_bufs (conn, buf, stream, _bytes_written);
+  if (stream) {
+    stream->last_offset += (gsize) _bytes_written;
+    _quiclib_transport_store_ack_bufs (conn, buf, stream, _bytes_written);
+  }
 
   g_free (vec_orig);
 
