@@ -407,6 +407,8 @@ quic_mux_pad_unlinked (GstPad * self, GstPad * peer, gpointer user_data)
 {
   GstQuicMux *quicmux = GST_QUICMUX (gst_pad_get_parent (self));
 
+  if (quicmux == NULL) return;
+
   GST_DEBUG_OBJECT (quicmux, "Pad %" GST_PTR_FORMAT " unlinked from peer %" 
       GST_PTR_FORMAT, self, peer);
 
