@@ -1454,6 +1454,9 @@ struct _GstQuicLibTransportConnection {
   /** GHashTable <gint64 (datagram ticket), GstBuffer> */
   GHashTable *datagrams_awaiting_ack;
 
+  /** GList <gint64 (stream id)> */
+  GList *streams_to_close;
+
   /*
    * ngtcp2 doesn't give us this information directly, only local streams
    * remaining
@@ -1470,6 +1473,28 @@ struct _GstQuicLibTransportConnection {
 
   GstQuicLibConnStatsTrackers stats;
 };
+
+gboolean _quiclib_add_stream_to_close (GstQuicLibTransportConnection *conn,
+    guint64 stream_id)
+{
+  gint64 *_id = g_new (gint64, 1);
+  *_id = stream_id;
+  conn->streams_to_close = g_list_append (conn->streams_to_close, _id);
+  GST_TRACE_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn),
+      "Added Stream ID %ld to close list", *_id);
+  return TRUE;
+}
+
+gint64 _quiclib_pop_stream_to_close (GstQuicLibTransportConnection *conn)
+{
+  gint64 stream_id = *((gint64 *) conn->streams_to_close->data);
+  g_free (conn->streams_to_close->data);
+  conn->streams_to_close = g_list_delete_link (conn->streams_to_close,
+      conn->streams_to_close);
+  GST_TRACE_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn),
+      "Popped stream %ld from close list", stream_id);
+  return stream_id;
+}
 
 struct _GstQuicLibStreamContext {
   GstQuicLibStreamState state;
@@ -3191,11 +3216,21 @@ quiclib_ngtcp2_conn_write (GstQuicLibTransportConnection *conn,
   size_t max_udp_size;
   ngtcp2_ssize nwrite, to_write = 0, pdatalen = 0;
   size_t i;
+  guint64 ts;
 
   GstBuffer *buffer;
   GstMapInfo map;
 
   gst_quiclib_transport_context_lock (conn);
+
+  GST_TRACE_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn), "nvec(%lu) final(%s)",
+      nvec, (final)?("TRUE"):("FALSE"));
+
+  if (nvec == 0 && final) {
+    _quiclib_add_stream_to_close (conn, stream_id);
+    gst_quiclib_transport_context_unlock (conn);
+    return 0;
+  }
 
   if (ngtcp2_conn_in_closing_period (conn->quic_conn) ||
       ngtcp2_conn_in_draining_period (conn->quic_conn)) {
@@ -3204,6 +3239,7 @@ quiclib_ngtcp2_conn_write (GstQuicLibTransportConnection *conn,
     gst_quiclib_transport_context_unlock (conn);
     return -1;
   }
+
   ngtcp2_path_storage_zero (&ps);
   ngtcp2_path_storage_zero (&prev_ps);
 
@@ -3235,17 +3271,62 @@ quiclib_ngtcp2_conn_write (GstQuicLibTransportConnection *conn,
   if (gst_debug_category_get_threshold (quiclib_transport) >= GST_LEVEL_TRACE)
   {
     GST_TRACE_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn),
-        "There are %lu stream buffers to write", nvec);
+        "There are %lu stream buffers to write and %u outstanding streams to "
+        "close gracefully", nvec, g_list_length (conn->streams_to_close));
     for (i = 0; i < nvec; i++) {
       GST_TRACE_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn),
           "Buffer %lu has size %lu bytes", i, frame[i].len);
     }
   }
 
+  ts = quiclib_ngtcp2_timestamp ();
+
+  while (conn->streams_to_close) {
+    gint64 _close_stream_id = _quiclib_pop_stream_to_close (conn);
+    nwrite = ngtcp2_conn_writev_stream (conn->quic_conn, &ps.path, &pi,
+        map.data, map.size, &pdatalen,
+        flags | NGTCP2_WRITE_STREAM_FLAG_MORE | NGTCP2_WRITE_STREAM_FLAG_FIN,
+        _close_stream_id, NULL, 0, ts);
+
+    switch (nwrite) {
+      case NGTCP2_ERR_NOMEM:
+      case NGTCP2_ERR_INVALID_ARGUMENT:
+        gst_quiclib_transport_context_unlock (conn);
+        return GST_QUICLIB_ERR;
+      case NGTCP2_ERR_STREAM_NOT_FOUND:
+      case NGTCP2_ERR_STREAM_SHUT_WR:
+      case NGTCP2_ERR_WRITE_MORE:
+        continue;
+      case 0:
+        gst_quiclib_transport_context_unlock (conn);
+        return 0;
+      default:
+        GST_DEBUG_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn),
+            "Ran out of packet space after writing final stream frame for "
+            "stream %lu", _close_stream_id);
+        gst_quiclib_transport_context_unlock (conn);
+
+        nwrite = quiclib_packet_write (conn, (const gchar *) map.data, nwrite,
+            &ps);
+        if (nwrite < 0) {
+          gst_buffer_unmap (buffer, &map);
+          return -1;
+        }
+
+        gst_buffer_unmap (buffer, &map);
+
+        return quiclib_ngtcp2_conn_write (conn, stream_id, frame, nvec, final,
+            orig_ref);
+    }
+  }
+
+  /* 
+   * For WRITE_MORE: conn->quic_conn, ps.path, pi, map.data, map.size and the
+   * timestamp must be the same.
+   */
   nwrite = ngtcp2_conn_writev_stream (conn->quic_conn, &ps.path, &pi,
       map.data, map.size, &pdatalen, flags, stream_id,
-      (frame != NULL)?(frame):(NULL), (frame != NULL)?(nvec):(0),
-          quiclib_ngtcp2_timestamp ());
+      (frame != NULL)?(frame):(NULL), (frame != NULL)?(nvec):(0), ts);
 
   gst_quiclib_transport_context_unlock (conn);
 
@@ -3880,6 +3961,10 @@ quiclib_data_received (GSocket *socket, GIOCondition condition,
       continue;
     }
 
+    /*
+     * TODO: Make this a timeout operation to pack ACKs into regular packets
+     * and minimise small packet overheads
+     */
     rv = quiclib_ngtcp2_conn_write (conn, -1, NULL, 0, 0, NULL);
     if (rv != 0) {
       continue;
