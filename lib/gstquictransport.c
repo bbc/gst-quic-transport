@@ -5238,7 +5238,7 @@ gst_quiclib_transport_send_stream (GstQuicLibTransportConnection *conn,
   ssize_t _bytes_written = 0;
   ngtcp2_vec *vec = NULL, *vec_orig;
   GList *maps = NULL;
-  size_t n;
+  size_t n = 0;
   GstQuicLibError rv = GST_QUICLIB_ERR_OK;
   GstQuicLibStreamContext *stream;
   GstQuicLibStreamMeta *meta = gst_buffer_get_quiclib_stream_meta (buf);
@@ -5280,14 +5280,16 @@ gst_quiclib_transport_send_stream (GstQuicLibTransportConnection *conn,
 
   buf->offset = stream->last_offset;
 
-  n = quiclib_buffer_to_vec (buf, &vec, &maps);
-  vec_orig = vec;
+  if (buf_size > 0) {
+    n = quiclib_buffer_to_vec (buf, &vec, &maps);
+    vec_orig = vec;
 
-  g_return_val_if_fail (n != 0, -1);
+    g_return_val_if_fail (n != 0, -1);
+  }
 
-  while (_bytes_written < buf_size) {
-    ssize_t _b_written = quiclib_ngtcp2_conn_write (conn, stream_id, vec, n, 0,
-      buf);
+  do {
+    ssize_t _b_written = quiclib_ngtcp2_conn_write (conn, stream_id, vec, n,
+      meta->final, buf);
 
     if (_b_written < 0) {
       GST_ERROR_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn),
@@ -5345,7 +5347,7 @@ gst_quiclib_transport_send_stream (GstQuicLibTransportConnection *conn,
         vec[0].len -= (size_t) _b_written;
       }
     }
-  }
+  } while (_bytes_written < buf_size);
 
   GST_DEBUG_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn),
       "Written %ld total bytes from %ld", _bytes_written, buf_size);
@@ -5357,7 +5359,9 @@ gst_quiclib_transport_send_stream (GstQuicLibTransportConnection *conn,
     _quiclib_transport_store_ack_bufs (conn, buf, stream, _bytes_written);
   }
 
-  g_free (vec_orig);
+  if (buf_size > 0) {
+    g_free (vec_orig);
+  }
 
   if (bytes_written) *bytes_written = _bytes_written;
   

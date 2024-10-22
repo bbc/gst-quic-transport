@@ -637,7 +637,7 @@ gst_quicsink_render (GstBaseSink * sink, GstBuffer * buffer)
     g_cond_wait (&quicsink->ctx_change, &quicsink->mutex);
   }
 
-  while (sent < buf_size) {
+  do {
     gssize b_sent = 0;
     GstQuicLibError err = gst_quiclib_transport_send_buffer (quicsink->conn,
         buffer, &b_sent);
@@ -701,7 +701,7 @@ gst_quicsink_render (GstBaseSink * sink, GstBuffer * buffer)
     sent += (gsize) b_sent;
     GST_TRACE_OBJECT (quicsink, "Sent %ld bytes of %lu, %lu sent total", b_sent,
         buf_size, sent);
-  }
+  } while (sent < buf_size);
 
   g_mutex_unlock (&quicsink->mutex);
 

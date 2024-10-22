@@ -380,11 +380,28 @@ quic_mux_close_stream_from_pad (GstQuicMux *quicmux, GstPad *pad,
   pthread_mutex_unlock (&quicmux->p_mutex);
 
   if (stream_id < QUICLIB_VARINT_MAX) {
-    GstQuery *closeq = gst_query_cancel_quiclib_stream (stream_id, reason);
-    if (!gst_pad_peer_query (quicmux->srcpad, closeq)) {
-      GST_ERROR_OBJECT (quicmux, "Close stream query failed!");
+    if (reason == 0) {
+      GstBuffer *close_buf = gst_buffer_new();
+
+      GST_DEBUG_OBJECT (quicmux, "Stream %lu closing gracefully, sending "
+          "zero-length buffer with FIN at offset %lu", stream_id,
+          stream->offset);
+
+      gst_buffer_add_quiclib_stream_meta (close_buf, stream_id, stream->offset,
+          0, TRUE);
+
+      if (gst_pad_push (quicmux->srcpad, close_buf) != GST_FLOW_OK) {
+        reason = 1;
+      }
     }
-    gst_query_unref (closeq);
+
+    if (reason > 0) {
+      GstQuery *closeq = gst_query_cancel_quiclib_stream (stream_id, reason);
+      if (!gst_pad_peer_query (quicmux->srcpad, closeq)) {
+        GST_ERROR_OBJECT (quicmux, "Close stream query failed!");
+      }
+      gst_query_unref (closeq);
+    }
 
     gst_element_remove_pad (GST_ELEMENT (quicmux), pad);
 
