@@ -3356,7 +3356,7 @@ quiclib_ngtcp2_conn_write (GstQuicLibTransportConnection *conn,
         case 0x0: test = conn->last_client_bidi_stream_id; break;
         case 0x1: test = conn->last_server_bidi_stream_id; break;
         case 0x2: test = conn->last_client_uni_stream_id; break;
-        case 0x3: test = conn->last_client_uni_stream_id; break;
+        case 0x3: test = conn->last_server_uni_stream_id; break;
       }
 
       if (test < stream_id) {
