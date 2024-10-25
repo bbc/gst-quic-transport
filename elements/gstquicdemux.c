@@ -975,7 +975,7 @@ gst_quic_demux_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
   }
 
   /*if (!gst_pad_is_linked (target_pad)) {*/
-  if (1) {
+  if (0) {
     GstBin *pipeline = GST_BIN (gst_element_get_parent (demux));
 
     while (!GST_IS_PIPELINE (pipeline)) {
