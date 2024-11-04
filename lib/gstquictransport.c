@@ -1693,7 +1693,13 @@ static void gst_quiclib_transport_connection_get_property (GObject * object,
       const ngtcp2_transport_params *tp =
           ngtcp2_conn_get_remote_transport_params (conn->quic_conn);
       
-      g_value_set_boolean (value, tp->max_datagram_frame_size > 0);
+      if (tp) {
+        g_value_set_boolean (value, tp->max_datagram_frame_size > 0);
+      } else {
+        GST_WARNING_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn), "Attempted "
+            "to get remote transport parameter before they were ready");
+        g_value_set_boolean (value, FALSE);
+      }
       break;
     }
     default:
