@@ -603,6 +603,8 @@ gst_quicsink_query (GstBaseSink * parent, GstQuery * query)
       return FALSE;
     }
     break;
+  case GST_QUERY_BITRATE:
+    return FALSE;
   default:
     GST_LOG_OBJECT (sink, "Received %s query, passing to base class",
         query_type);

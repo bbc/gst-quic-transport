@@ -522,7 +522,7 @@ quic_demux_open_datagram_srcpad (GstQuicDemux *demux, GstElement *target_peer)
 
   g_rec_mutex_lock (&priv->mutex);
   priv->datagram_srcpad =
-      gst_pad_new_from_static_template (&datagramsrc_factory, "dg_src");
+      gst_pad_new_from_static_template (&datagramsrc_factory, NULL);
 
   gst_element_add_pad (GST_ELEMENT (demux), priv->datagram_srcpad);
 
