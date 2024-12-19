@@ -67,10 +67,8 @@ struct _GstQuicMuxStreamObject
   guint64 stream_id;
   guint64 offset;
 
-  /*GMutex mutex;*/
-  pthread_mutex_t p_mutex;
-  /*GCond wait;*/
-  pthread_cond_t p_wait;
+  GMutex mutex;
+  GCond wait;
 };
 
 #define GST_TYPE_QUICMUX (gst_quic_mux_get_type())
@@ -81,8 +79,7 @@ struct _GstQuicMux
 {
   GstElement element;
 
-  /*GMutex mutex;*/
-  pthread_mutex_t p_mutex;
+  GRecMutex mutex;
 
   GstPad *srcpad;
   /*
