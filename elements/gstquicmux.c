@@ -737,23 +737,7 @@ gst_quic_mux_src_event (GstPad * pad, GstObject * parent, GstEvent * event)
   switch (GST_EVENT_TYPE (event)) {
   case GST_EVENT_CUSTOM_UPSTREAM:
     s = gst_event_get_structure (event);
-    if (gst_structure_has_name (s, QUICLIB_CLIENT_CONNECT)) {
-      /*
-       * TODO: This is never called anyway.
-       */
-#if 0
-      gst_structure_get_enum (s, GST_QUIC_QUERY_CONNECTION_STATE_TYPE_NAME,
-            gst_quiclib_transport_state_get_type(), (gint *) &state);
-
-      if (state < QUIC_STATE_HANDSHAKE) {
-        GST_ERROR_OBJECT (quicmux, "Connection isn't open!");
-      } else {
-        gst_quic_mux_request_stashed_streams (quicmux);
-      }
-#else
-      g_abort ();
-#endif
-    } else if (gst_structure_has_name (s, QUICLIB_HANDSHAKE_COMPLETE)) {
+    if (gst_structure_has_name (s, QUICLIB_HANDSHAKE_COMPLETE)) {
       ret = gst_quic_mux_request_stashed_streams (quicmux);
       break;
     } else if (gst_structure_has_name (s, QUICLIB_CONNECTION_CLOSE)) {
@@ -788,8 +772,6 @@ gst_quic_mux_src_event (GstPad * pad, GstObject * parent, GstEvent * event)
         GST_TRACE_OBJECT (quicmux, "Stream close for unknown stream ID %lu - "
             "might've already been closed", stream_id);
       }
-
-      /*g_mutex_unlock (&quicmux->mutex);*/
 
       if (pad) {
         GST_DEBUG_OBJECT (quicmux, "Stream %lu has closed, releasing pad %"
@@ -917,8 +899,6 @@ gst_quic_mux_stream_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
   guint64 buflen = gst_buffer_get_size (buf);
 
   quicmux = GST_QUICMUX (parent);
-
-  GST_QUICLIB_PRINT_BUFFER (quicmux, buf);
 
   stream = quic_mux_get_stream_from_pad (quicmux, pad);
 
@@ -1259,8 +1239,8 @@ gst_quic_mux_src_query (GstPad *pad, GstObject *parent, GstQuery *query)
     } else if (gst_structure_has_name (s, QUICLIB_HANDSHAKE_COMPLETE)) {
       GST_DEBUG_OBJECT (mux, "Handshake complete");
     } else if (gst_structure_has_name (s, QUICLIB_STREAM_OPEN)) {
-      /* TODO: Request a new pad */
-      /*g_assert (0);*/
+      g_warning ("To open new streams, request a new stream pad.");
+      return FALSE;
     }
     break;
   default:

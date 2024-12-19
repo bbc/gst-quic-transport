@@ -201,18 +201,6 @@ gst_quiclib_new_connection_error_element_event (GstElement *element,
 gboolean
 gst_quiclib_parse_connection_error_event (GstEvent *event, guint64 *error);
 
-/*gboolean
-gst_quiclib_new_stream_error_pad_event (GstPad *pad, guint64 stream_id,
-    guint64 error);
-
-gboolean
-gst_quiclib_new_stream_error_element_event (GstElement *element,
-    guint64 stream_id, guint64 error);
-
-gboolean
-gst_quiclib_parse_stream_error_event (GstEvent *event, guint64 *stream_id,
-    guint64 *error);*/
-
 GType quiclib_stream_type_get_type (void);
 typedef enum _GstQuicLibStreamType {
   QUIC_STREAM_BIDI,
@@ -822,65 +810,6 @@ void gst_quiclib_address_list_free (GstQuicLibAddressList *l);
       } \
     } \
   } while (0);
-
-/*
- * For debugging only - don't leave in released code!
- */
-#if 1
-#define GST_QUICLIB_PRINT_BUFFER(ctx, buf)
-#else
-#define GST_QUICLIB_PRINT_BUFFER(ctx, buf) \
-  do { \
-    gchar dbgbuf[20000]; \
-    gsize write_offset = 0; \
-    GstMapInfo map; \
-    GstQuicLibStreamMeta *stream_meta; \
-    GstQuicLibDatagramMeta *datagram_meta; \
-    \
-    stream_meta = gst_buffer_get_quiclib_stream_meta (buf); \
-    datagram_meta = gst_buffer_get_quiclib_datagram_meta (buf); \
-    \
-    write_offset = g_snprintf (dbgbuf, 10000, \
-        "Buffer %p of length %lu contains:\n", buf, gst_buffer_get_size (buf));\
-    \
-    if (stream_meta) { \
-      write_offset += g_snprintf (dbgbuf + write_offset, 10000 - write_offset, \
-          "\tGstQuicLibStreamMeta %p:\n\t\tstream_id %ld\n" \
-          "\t\toffset: %lu\n\t\tlength: %lu\n\t\tfinal: %s\n", stream_meta, \
-          stream_meta->stream_id, stream_meta->offset, stream_meta->length, \
-          stream_meta->final?"TRUE":"FALSE"); \
-    } \
-    if (datagram_meta) { \
-      write_offset += g_snprintf (dbgbuf + write_offset, 10000 - write_offset, \
-          "\tGstQuicLibDatagramMeta %p:\n\t\tlength: %lu\n", datagram_meta, \
-          datagram_meta->length); \
-    } \
-    if (!gst_buffer_map (buf, &map, GST_MAP_READ)) { \
-      GST_ERROR_OBJECT (ctx, "Couldn't open buffer %p for reading", buf); \
-    } else { \
-      gint line, num_lines; \
-      gsize offset = 0, tot_size = gst_buffer_get_size (buf); \
-      \
-      num_lines = tot_size / 16; \
-      if ((tot_size % 16) != 0) num_lines++; \
-      if (num_lines > 180) num_lines = 180; \
-      \
-      for (line = 0; line < num_lines && write_offset < 10000; line++) { \
-        gint c; \
-        write_offset += g_snprintf (dbgbuf + write_offset, 10000 - write_offset,\
-          "\t"); \
-        for (c = 0; c < 16 && offset < tot_size && write_offset < 10000; c++) { \
-          write_offset += g_snprintf (dbgbuf + write_offset, \
-              10000 - write_offset, "%02x ", map.data[offset++]); \
-        } \
-        write_offset += g_snprintf (dbgbuf + write_offset, 10000 - write_offset,\
-            "\n"); \
-      } \
-      GST_DEBUG_OBJECT (ctx, "%s", dbgbuf); \
-      gst_buffer_unmap (buf, &map); \
-    } \
-  } while (0);
-#endif
 
 G_END_DECLS
 

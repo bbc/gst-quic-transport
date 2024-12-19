@@ -526,13 +526,6 @@ socket_control_message_timestamp_deserialise (int level, int type, gsize size,
   return NULL;
 }
 
-typedef struct _GstQuicLibTransportBufWatchSource {
-  GSource parent;
-
-  GMutex mutex;
-
-  GList *bufs;
-} GstQuicLibTransportBufWatchSource;
 
 /*
  * TODO: Just use the ngtcp2_transport_params struct instead?
@@ -559,8 +552,6 @@ struct _GstQuicLibTransportContextPrivate {
   GThread *async_notif_thread;
 
   GSource *timeout;
-  guint timeout_id;
-  GSocketService *socket_serv;
   GstQuicLibTransportState state;
 
   gchar *location;
@@ -690,8 +681,6 @@ gst_quiclib_transport_context_init (GstQuicLibTransportContext *self)
   priv->async_notif_loop = NULL;
   priv->async_notif_thread = NULL;
   priv->timeout = NULL;
-  priv->timeout_id = 0;
-  priv->socket_serv = NULL;
   priv->location = g_strdup (QUICLIB_LOCATION_DEFAULT);
   priv->enable_stats = TRUE;
 
@@ -833,8 +822,6 @@ static void gst_quiclib_transport_context_get_property (GObject * object,
   }
 }
 
-/*#define LOCK_DEBUGGING 1*/
-
 void
 quiclib_transport_context_lock (GstQuicLibTransportContext *ctx)
 {
@@ -844,14 +831,8 @@ quiclib_transport_context_lock (GstQuicLibTransportContext *ctx)
   g_rec_mutex_lock (&priv->rmutex);
 }
 
-#ifndef LOCK_DEBUGGING
 #define gst_quiclib_transport_context_lock(c) \
   quiclib_transport_context_lock (GST_QUICLIB_TRANSPORT_CONTEXT (c))
-#else
-#define gst_quiclib_transport_context_lock(c) \
-  GST_DEBUG_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (c), "Locking ngtcp2 lock"); \
-  quiclib_transport_context_lock (GST_QUICLIB_TRANSPORT_CONTEXT (c))
-#endif
 
 void
 quiclib_transport_context_unlock (GstQuicLibTransportContext *ctx)
@@ -862,14 +843,8 @@ quiclib_transport_context_unlock (GstQuicLibTransportContext *ctx)
   g_rec_mutex_unlock (&priv->rmutex);
 }
 
-#ifndef LOCK_DEBUGGING
 #define gst_quiclib_transport_context_unlock(c) \
   quiclib_transport_context_unlock (GST_QUICLIB_TRANSPORT_CONTEXT (c))
-#else
-#define gst_quiclib_transport_context_unlock(c) \
-  GST_DEBUG_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (c), "Unlocking ngtcp2 lock"); \
-  quiclib_transport_context_unlock (GST_QUICLIB_TRANSPORT_CONTEXT (c))
-#endif
 
 /**
  * Begin getters/setters for parameters in GstQuicLibTransportContextPrivate
@@ -1021,32 +996,6 @@ gst_quiclib_transport_context_set_timeout (gpointer c, GSource *timeout) {
 
   gst_quiclib_transport_context_lock (c);
   p->timeout = timeout;
-  gst_quiclib_transport_context_unlock (c);
-}
-
-GSocketService *
-gst_quiclib_transport_context_get_socket_service (gpointer c) {
-  GstQuicLibTransportContext *ctx = GST_QUICLIB_TRANSPORT_CONTEXT (c);
-  GstQuicLibTransportContextPrivate *priv =
-      gst_quiclib_transport_context_get_instance_private (ctx);
-  GSocketService *socket_serv;
-
-  gst_quiclib_transport_context_lock (ctx);
-  socket_serv = priv->socket_serv;
-  gst_quiclib_transport_context_unlock (ctx);
-
-  return socket_serv;
-}
-
-void
-gst_quiclib_transport_context_set_socket_service (gpointer c,
-    GSocketService *socket_serv) {
-  GstQuicLibTransportContextPrivate *p =
-      gst_quiclib_transport_context_get_instance_private (
-          GST_QUICLIB_TRANSPORT_CONTEXT (c));
-
-  gst_quiclib_transport_context_lock (c);
-  p->socket_serv = socket_serv;
   gst_quiclib_transport_context_unlock (c);
 }
 
@@ -2229,7 +2178,6 @@ quiclib_openssl_dbg_cb (int write_p, int version, int content_type,
 }
 #endif
 
-#if 1
 void
 quiclib_ssl_keylog_cb (const SSL *ssl, const char *line)
 {
@@ -2295,7 +2243,6 @@ quiclib_enable_tls_export (GstQuicLibTransportContext *ctx, SSL *ssl)
     SSL_CTX_set_keylog_callback (SSL_get_SSL_CTX (ssl), quiclib_ssl_keylog_cb);
   }
 }
-#endif
 
 /*
  * ngtcp2 callback definitions
@@ -3019,20 +2966,6 @@ quiclib_ngtcp2_timestamp (void)
   return (guint64) tp.tv_sec * NGTCP2_SECONDS + (guint64) tp.tv_nsec;
 }
 
-
-gpointer
-quiclib_copy_gcharstring (gconstpointer src, gpointer user_data)
-{
-  const gchar *srcstr = (const gchar *) src;
-  gchar *rv = g_malloc (strlen (srcstr) + 1);
-  if (rv == NULL) {
-    return NULL;
-  }
-  memcpy (rv, srcstr, strlen (srcstr));
-  rv[strlen (srcstr)] = 0;
-  return rv;
-}
-
 ssize_t
 quiclib_ngtcp2_get_stream_window (GstQuicLibTransportConnection *conn,
     int64_t stream_id)
@@ -3514,9 +3447,6 @@ quiclib_ngtcp2_datagram_write (GstQuicLibTransportConnection *conn,
   return nwrite;
 }
 
-/*void
-quiclib_print_ngtcp2_transport_params (GstQuicLibTransportContext *ctx,
-    ngtcp2_transport_params *params)*/
 #define quiclib_print_ngtcp2_transport_params(ctx, params) \
 do { \
   GST_DEBUG_OBJECT (ctx, \
@@ -4759,7 +4689,6 @@ gint
 gst_quiclib_transport_disconnect (GstQuicLibTransportConnection *conn,
     gboolean app_error, guint reason)
 {
-  /*ngtcp2_path path;*/
   ngtcp2_ssize written;
   ngtcp2_pkt_info pi;
   uint8_t buf[NGTCP2_MAX_UDP_PAYLOAD_SIZE];
@@ -4812,30 +4741,6 @@ gst_quiclib_transport_disconnect (GstQuicLibTransportConnection *conn,
   gst_quiclib_transport_context_unlock (conn);
 
   return 0;
-}
-
-gboolean
-gst_quiclib_transport_server_remove_listens (GstQuicLibServerContext *ctx,
-    GSList *addrs)
-{
-  g_assert (0);
-
-  /* TODO */
-
-  return FALSE;
-}
-
-void
-gst_quiclib_transport_set_hdrctx (GstQuicLibTransportConnection *conn,
-    void *ctx)
-{
-
-}
-
-void *
-gst_quiclib_transport_get_hdrctx (GstQuicLibTransportConnection *ctx)
-{
-  return NULL;
 }
 
 struct _GstQuicLibUnmap {
@@ -4994,21 +4899,6 @@ GST_DEFINE_MINI_OBJECT_TYPE (GstQuicLibStreamClose, gst_quiclib_stream_close);
     (GST_IS_MINI_OBJECT_TYPE (obj, QUICLIB_TYPE_STREAM_CLOSE))
 #define QUICLIB_STREAM_CLOSE_CAST(obj) ((GstQuicLibStreamClose *) obj)
 
-GstQuicLibStreamClose *
-gst_quiclib_stream_close_new (guint64 stream_id, guint64 reason)
-{
-  GstQuicLibStreamClose *obj;
-
-  obj = g_new (GstQuicLibStreamClose, 1);
-
-  gst_mini_object_init (GST_MINI_OBJECT_CAST (obj), 0,
-      QUICLIB_TYPE_STREAM_CLOSE, NULL, NULL, NULL);
-
-  obj->stream_id = stream_id;
-  obj->error_close = reason;
-
-  return obj;
-}
 
 #define gst_quiclib_stream_close_ref(obj) \
     (GstQuicLibStreamClose *) gst_mini_object_ref (GST_MINI_OBJECT_CAST (obj));
@@ -5236,66 +5126,6 @@ gst_quiclib_transport_send_buffer (GstQuicLibTransportConnection *conn,
 
   return GST_QUICLIB_ERR;
 }
-
-#if 0
-void
-quiclib_transport_print_buffer (GstQuicLibTransportContext *ctx, GstBuffer *buf)
-{
-  guint offset = 0;
-  guint idx;
-
-  GST_DEBUG_OBJECT (ctx, "GstBuffer %p has %u memory blocks",
-      buf, gst_buffer_n_memory (buf));
-
-  /*
-   * Format:
-   *
-   * Buffer 0 (4):
-   *    00000000 (00000000): e0 a1 b9 f3
-   * Buffer 1 (12):
-   *    00000000 (00000004): 01 45 aa f1 57 7f 21 00 00 9a be f1
-   * Buffer 2 (1388):
-   *    00000000 (00000016): a1 e7 ff 00 00 00 00 00 00 00 16 eb eb a0 f7 44
-   *    00000016 (00000032): c4 d9 00 11 22 33 44 55 66 77 88 99 aa bb cc dd
-   *    00000032 (00000048): (...)
-   */
-
-  for (idx = 0; idx < gst_buffer_n_memory (buf); idx++) {
-    GstMemory *mem;
-    GstMapInfo map;
-    guint line_idx;
-
-    mem = gst_buffer_peek_memory (buf, idx);
-    gst_memory_map (mem, &map, GST_MAP_READ);
-
-    GST_DEBUG_OBJECT (ctx, "Buffer %u (%lu)", idx, map.size);
-
-    for (line_idx = 0; line_idx < (map.size / 16) + 1; line_idx++) {
-      gchar bufline[80];
-      gint bufline_offset = 0;
-      guint data_idx = 0;
-
-      bufline_offset = sprintf (bufline, "%08u (%08u):", line_idx * 16,
-          offset + line_idx * 16);
-
-      for (data_idx = line_idx * 16;
-           data_idx < map.size && data_idx < (line_idx + 1) * 16; data_idx++) {
-        guchar top_nibble = (map.data[data_idx] % 0xf0) >> 4;
-        guchar bottom_nibble = map.data[data_idx] % 0x0f;
-        bufline_offset += sprintf (bufline + bufline_offset, " %c%c",
-            (top_nibble > 9)?(top_nibble + 87):(top_nibble + 48),
-            (bottom_nibble > 9)?(bottom_nibble + 87):(bottom_nibble + 48));
-      }
-
-      GST_DEBUG_OBJECT (ctx, "\t%s", bufline);
-    }
-
-    offset += map.size;
-
-    gst_memory_unmap (mem, &map);
-  }
-}
-#endif
 
 gboolean
 _quiclib_transport_store_ack_bufs (GstQuicLibTransportConnection *conn,

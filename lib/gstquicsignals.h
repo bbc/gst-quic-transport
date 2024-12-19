@@ -59,31 +59,11 @@ typedef enum {
   GST_QUICLIB_SIGNALS_MAX
 } GstQuicLibConnSignals;
 
-/*#define gst_quiclib_install_conn_signals(signal_src) \
-  do { \
-	signal_src->signals[GST_QUICLIB_HANDSHAKE_COMPLETE_SIGNAL] = \
-      gst_quiclib_handshake_complete_signal_new (signal_src); \
-	signal_src->signals[GST_QUICLIB_STREAM_OPENED_SIGNAL] = \
-	  gst_quiclib_stream_opened_signal_new (signal_src); \
-	signal_src->signals[GST_QUICLIB_STREAM_CLOSED_SIGNAL] = \
-	  gst_quiclib_stream_closed_signal_new (signal_src); \
-    signal_src->signals[GST_QUICLIB_STREAM_FLOW_CONTROL_LIMITED_SIGNAL] = \
-      gst_quiclib_stream_flow_control_limited_signal_new (signal_src); \
-    signal_src->signals[GST_QUICLIB_CONN_FLOW_CONTROL_LIMITED_SIGNAL] = \
-      gst_quiclib_conn_flow_control_limited_signal_new (signal_src); \
-    signal_src->signals[GST_QUICLIB_CONN_ERROR_SIGNAL] = \
-      gst_quiclib_conn_error_signal_new (signal_src); \
-    signal_src->signals[GST_QUICLIB_CONN_CLOSED_SIGNAL] = \
-      gst_quiclib_conn_closed_signal_new (signal_src); \
-  } while (0)*/
-
 /*
  * Signal called when the QUIC handshake completes, and application data can be
  * exchanged between peers.
  */
 #define GST_QUICLIB_HANDSHAKE_COMPLETE_SIGNAL_ID "quic-handshake-complete"
-
-/*guint gst_quiclib_handshake_complete_signal_new (GstElement *signal_src);*/
 
 #define gst_quiclib_handshake_complete_signal_new(signal_src_class) \
   g_signal_new (GST_QUICLIB_HANDSHAKE_COMPLETE_SIGNAL_ID, \
@@ -92,9 +72,6 @@ typedef enum {
       0, NULL, NULL, NULL, \
       G_TYPE_NONE, 2, G_TYPE_SOCKET_ADDRESS, G_TYPE_STRING)
 
-/*void gst_quiclib_handshake_complete_signal_emit (GstElement *signal_src,
-    GSocketAddress *sa, const gchar *negotiated_alpn);*/
-
 #define gst_quiclib_handshake_complete_signal_emit(signal_src, sa, alpn) \
   g_signal_emit_by_name (G_OBJECT (signal_src), \
       GST_QUICLIB_HANDSHAKE_COMPLETE_SIGNAL_ID, sa, alpn)
@@ -102,9 +79,6 @@ typedef enum {
 typedef void (*gst_quiclib_handshake_complete_signal_cb) (
     GstElement *signal_src, GSocketAddress *sa, const gchar *negotiated_alpn,
     gpointer user_data);
-
-/*gulong gst_quiclib_handshake_complete_signal_connect (GstElement *signal_src,
-    gst_quiclib_handshake_complete_signal_cb cb, gpointer user_data);*/
 
 #define gst_quiclib_handshake_complete_signal_connect( \
     signal_src, cb, user_data) \
@@ -120,7 +94,6 @@ typedef void (*gst_quiclib_handshake_complete_signal_cb) (
  * Signal called when a new stream is opened.
  */
 #define GST_QUICLIB_STREAM_OPENED_SIGNAL_ID "quic-stream-opened"
-/*guint gst_quiclib_stream_opened_signal_new (GstElement *signal_src);*/
 #define gst_quiclib_stream_opened_signal_new(signal_src_class) \
   g_signal_new (GST_QUICLIB_STREAM_OPENED_SIGNAL_ID, \
         G_TYPE_FROM_CLASS (signal_src_class), \
@@ -128,8 +101,6 @@ typedef void (*gst_quiclib_handshake_complete_signal_cb) (
         0, NULL, NULL, NULL, \
         G_TYPE_NONE, 1, G_TYPE_UINT64)
 
-/*void gst_quiclib_stream_opened_signal_emit (GstElement *signal_src,
-    guint64 stream_id);*/
 #define gst_quiclib_stream_opened_signal_emit(signal_src, stream_id) \
   g_signal_emit_by_name (G_OBJECT (signal_src), \
       GST_QUICLIB_STREAM_OPENED_SIGNAL_ID, stream_id)
@@ -137,8 +108,6 @@ typedef void (*gst_quiclib_handshake_complete_signal_cb) (
 typedef void (*gst_quiclib_stream_opened_signal_cb) (GstElement *signal_src,
     guint64 stream_id, gpointer user_data);
 
-/*gulong gst_quiclib_stream_opened_signal_connect (GstElement *signal_src,
-    gst_quiclib_stream_opened_signal_cb cb, gpointer user_data);*/
 #define gst_quiclib_stream_opened_signal_connect(signal_src, cb, user_data) \
   g_signal_connect_data (signal_src, GST_QUICLIB_STREAM_OPENED_SIGNAL_ID, \
         (GCallback) cb, user_data, NULL, 0)

@@ -244,15 +244,6 @@ gboolean
 gst_quiclib_transport_disconnect (GstQuicLibTransportConnection *conn,
     gboolean app_error, guint reason);
 
-/*
- * If addrs encompasses all addresses this server is listening on, or if addrs
- * is NULL, then all listening nodes for this server have been closed and this
- * object can be unref'd. This method will return TRUE in that case.
- */
-gboolean
-gst_quiclib_transport_server_remove_listens (GstQuicLibServerContext *ctx,
-    GSList *addrs);
-
 #define GST_QUICLIB_DEFAULT_ADDRESS "0.0.0.0"
 #define GST_QUICLIB_DEFAULT_PORT 443
 #define GST_QUICLIB_DEFAULT_SNI "localhost"

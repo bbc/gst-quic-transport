@@ -864,8 +864,6 @@ gst_quic_demux_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
 
   g_rec_mutex_lock (&priv->mutex);
 
-  GST_QUICLIB_PRINT_BUFFER (demux, buf);
-
   stream = gst_buffer_get_quiclib_stream_meta (buf);
   if (stream != NULL) {
     stream_id = stream->stream_id;
@@ -967,29 +965,12 @@ gst_quic_demux_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
     target_pad = priv->datagram_srcpad;
   }
 
-  /*g_assert (target_pad);*/
   if (target_pad == NULL || !gst_pad_is_linked (target_pad)) {
     /* Nothing interested in this stream or datagram  - TODO cancel stream? */
     g_rec_mutex_unlock (&priv->mutex);
     return GST_FLOW_OK;
   }
 
-  /*if (!gst_pad_is_linked (target_pad)) {*/
-  if (0) {
-    GstBin *pipeline = GST_BIN (gst_element_get_parent (demux));
-
-    while (!GST_IS_PIPELINE (pipeline)) {
-      GST_TRACE_OBJECT (demux, "Bin %s (%p) is not pipeline, going up...",
-          gst_element_get_name (pipeline), pipeline);
-      pipeline = GST_BIN (gst_element_get_parent (pipeline));
-    }
-
-    GST_TRACE_OBJECT (demux, "Found pipeline %s (%p)",
-        gst_element_get_name (pipeline), pipeline);
-
-    gst_debug_bin_to_dot_file_with_ts (pipeline, GST_DEBUG_GRAPH_SHOW_ALL,
-        "quicdemux-pad"/*-unlinked-error"*/);
-  }
   g_assert (gst_pad_is_linked (target_pad));
 
   g_rec_mutex_unlock (&priv->mutex);
@@ -1008,38 +989,6 @@ gst_quic_demux_chain (GstPad * pad, GstObject * parent, GstBuffer * buf)
 
   return rv;
 }
-
-/*void
-quic_demux_pad_linked (GstPad *self, GstPad *peer, gpointer user_data)
-{
-  gst_quic_demux_add_peer (GST_QUICDEMUX (gst_pad_get_parent (self)),
-      GST_ELEMENT (gst_pad_get_parent (peer)));
-}
-
-gboolean
-quic_demux_find_pad (gint64* key, GstPad *value, GstPad *search)
-{
-  if (value == search) return TRUE;
-  return FALSE;
-}
-
-void
-quic_demux_pad_unlinked (GstPad *self, GstPad *peer, gpointer user_data)
-{
-  GstQuicDemux *quicdemux = GST_QUICDEMUX (gst_pad_get_parent (self));
-  guint rv;
-
-  g_rec_mutex_lock (&quicdemux->mutex);
-
-  rv = g_hash_table_find (quicdemux->stream_srcpads,
-      (GHRFunc) quic_demux_find_pad, (gpointer) self);
-
-  GST_TRACE_OBJECT (quicdemux,
-      "Removed %u entries from the stream hash table relating to pad %p", rv,
-      self);
-
-  g_rec_mutex_unlock (&quicdemux->mutex);
-}*/
 
 void
 quic_demux_stream_hash_destroy (GstPad *sink)

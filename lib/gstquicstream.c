@@ -46,20 +46,6 @@
 #include "gstquictransport.h"
 #include "gstquiccommon.h"
 
-gssize
-gst_quiclib_transport_stream_send_raw (GstQuicLibTransportConnection *conn,
-    guint64 stream_id, const guint *buf, const gsize buflen)
-{
-  return 0;
-}
-
-void
-gst_quiclib_transport_stream_cancel (GstQuicLibTransportConnection *conn,
-    guint64 stream_id)
-{
-
-}
-
 GType
 gst_quiclib_stream_meta_api_get_type (void)
 {

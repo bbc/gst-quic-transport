@@ -62,18 +62,6 @@ GSocketAddress *
 _quiclib_copy_address (GSocketAddress *src, gpointer data)
 {
   return g_object_ref (src);
-  /*switch (g_socket_address_get_family ((GSocketAddress *) src)) {
-    case G_SOCKET_FAMILY_UNIX:
-      return g_unix_socket_address_new (
-          g_unix_socket_address_get_path (G_UNIX_SOCKET_ADDRESS (src)));
-    case G_SOCKET_FAMILY_IPV4:
-    case G_SOCKET_FAMILY_IPV6:
-      return g_inet_socket_address_new (
-          g_inet_socket_address_get_address (G_INET_SOCKET_ADDRESS (src)),
-          g_inet_socket_address_get_port (G_INET_SOCKET_ADDRESS (src)));
-    default:
-      return NULL;
-  }*/
 }
 
 GstQuicLibAddressList *
@@ -136,119 +124,6 @@ static GObject * gst_quiclib_common_constructor (GType type,
     guint n_construct_params, GObjectConstructParam *construct_params);
 void gst_quiclib_common_dispose (GObject *obj);
 
-#ifdef USE_HASHTABLE
-static guint
-quiclib_client_endpoint_hash (gconstpointer key)
-{
-  GstQuicLibTransportConnection *ctx =
-      GST_QUICLIB_TRANSPORT_CONNECTION ((gpointer) key);
-  GInetSocketAddress *sa = gst_quiclib_transport_get_peer (ctx);
-  guint hash;
-
-  g_return_val_if_fail (sa, 0);
-
-  switch (g_socket_address_get_family (G_SOCKET_ADDRESS (sa))) {
-  case G_SOCKET_FAMILY_IPV4:
-  case G_SOCKET_FAMILY_IPV6:
-  {
-    GInetAddress *ia = g_inet_socket_address_get_address (sa);
-    GBytes *bytes = g_bytes_new (g_inet_address_to_bytes (ia),
-        g_inet_address_get_native_size (ia));
-    hash = g_bytes_hash (bytes);
-    g_bytes_unref (bytes);
-    break;
-  }
-  default:
-    abort();
-  }
-
-  g_object_unref (sa);
-
-  return hash;
-}
-
-static guint
-quiclib_server_endpoint_hash (gconstpointer key)
-{
-  GstQuicLibServerContext *ctx = GST_QUICLIB_SERVER_CONTEXT ((gpointer) key);
-  GSList *a, *addrs = gst_quiclib_transport_get_listening_addrs (ctx);
-  GByteArray *ba;
-  GBytes *bytes;
-  guint n = 0, hash;
-  gsize buflen = 0;
-
-  g_return_val_if_fail (addrs, 0);
-
-  a = addrs;
-
-  while (addrs != NULL) {
-    if ((g_socket_address_get_family ((GSocketAddress *) addrs->data)
-            != G_SOCKET_FAMILY_IPV4) &&
-        (g_socket_address_get_family ((GSocketAddress *) addrs->data)
-            != G_SOCKET_FAMILY_IPV6)) {
-      abort();
-    }
-    buflen += g_inet_address_get_native_size (
-        g_inet_socket_address_get_address (
-            (GInetSocketAddress *) addrs->data));
-    n++;
-    addrs = addrs->next;
-  }
-
-  ba = g_byte_array_sized_new (buflen + ((n - 1) * 2));
-  addrs = a;
-
-  while (addrs != NULL) {
-    GInetAddress *ia =
-        g_inet_socket_address_get_address ((GInetSocketAddress *) addrs->data);
-    ba = g_byte_array_append (ba, g_inet_address_to_bytes (ia),
-        g_inet_address_get_native_size (ia));
-    addrs = addrs->next;
-  }
-
-  bytes = g_byte_array_free_to_bytes (ba);
-  hash = g_bytes_hash (bytes);
-  g_bytes_unref (bytes);
-
-  return hash;
-}
-
-/* GEqualFunc implementation */
-static gboolean
-quiclib_endpoint_equal (gconstpointer pa, gconstpointer pb)
-{
-  GInetSocketAddress *a = (GInetSocketAddress *) pa;
-  GInetSocketAddress *b = (GInetSocketAddress *) pb;
-
-  if (g_socket_address_get_family ((GSocketAddress *) a) !=
-      g_socket_address_get_family ((GSocketAddress *) b))
-  {
-    return FALSE;
-  }
-
-  if (g_inet_socket_address_get_port (a) != g_inet_socket_address_get_port (b))
-  {
-    return FALSE;
-  }
-
-  return g_inet_address_equal (g_inet_socket_address_get_address (a),
-      g_inet_socket_address_get_address (b));
-}
-
-static GstQuicLibTransportContext *
-quiclib_get_instance (GHashTable *t, GInetSocketAddress *addr)
-{
-  GstQuicLibTransportContext *rv;
-
-  if (g_hash_table_lookup_extended (t, addr, NULL, (gpointer *) &rv)) {
-    return rv;
-  }
-
-  /* Nothing matches in the hash table, so time to create a new one */
-  return NULL;
-}
-#endif
-
 static void
 gst_quiclib_common_class_init (GstQuicLibCommonClass *klass)
 {
@@ -264,14 +139,7 @@ gst_quiclib_common_class_init (GstQuicLibCommonClass *klass)
 static void
 gst_quiclib_common_init (GstQuicLibCommon *self)
 {
-#ifdef USE_HASHTABLE
-  self->client_instances =
-      g_hash_table_new (quiclib_client_endpoint_hash, quiclib_endpoint_equal);
-  self->listening_servers =
-      g_hash_table_new (quiclib_server_endpoint_hash, quiclib_endpoint_equal);
-#else
   self->clients = self->servers = NULL;
-#endif
 
   g_mutex_init (&self->mutex);
 }
@@ -315,9 +183,7 @@ quiclib_foreach_stop_server (GstQuicLibServerContext *server,
 {
   g_assert (GST_IS_QUICLIB_SERVER_CONTEXT (server));
 
-  if (gst_quiclib_transport_server_remove_listens (server, NULL)) {
-    gst_object_unref (server);
-  }
+  gst_object_unref (server);
 }
 
 void
@@ -325,13 +191,8 @@ gst_quiclib_common_dispose (GObject *obj)
 {
   GstQuicLibCommon *self = GST_QUICLIB_COMMON (obj);
 
-#ifdef USE_HASHTABLE
-  g_hash_table_unref (self->client_instances);
-  g_hash_table_unref (self->listening_servers);
-#else
   g_list_foreach (self->clients, (GFunc) quiclib_foreach_close_conn, self);
   g_list_foreach (self->servers, (GFunc) quiclib_foreach_stop_server, self);
-#endif
 
   g_object_unref (self->resolver);
 
