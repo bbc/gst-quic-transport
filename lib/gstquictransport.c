@@ -42,6 +42,24 @@
  * Boston, MA 02111-1307, USA.
  */
 
+/*
+ * HOW TO USE THIS LIBRARY:
+ *
+ * The code presented in this file integrates a SINGLE downstream application
+ * with an abstracted QUIC transport implementation. The downstream application
+ * should use gst_quiclib_transport_server_new and _server_listen to start a
+ * server instance, and clients should use gst_quiclib_transport_client_new and
+ * _client_connect to connect to remote servers. The downstream application
+ * should implement the GstQuicLibTransportUserInterface to receive callbacks
+ * for events such as connection events, stream/datagram data arriving, and
+ * acknowledgements. Use gst_quiclib_transport_open_stream to open new streams,
+ * send data on gst_quiclib_transport_send_stream, and close them with
+ * gst_quiclib_transport_close_stream.
+ * 
+ * Stream buffers should be supplied with GstQuicLibStreamMeta metas attached
+ * to the buffers (see gstquicstream.h).
+ */
+
 #include "gstquictransport.h"
 #include "gstquicstream.h"
 #include "gstquicdatagram.h"
@@ -79,6 +97,13 @@ GST_DEBUG_CATEGORY_STATIC (quiclib_transport);  // define category (statically)
 
 #define OPENSSL_DEBUG
 
+/**
+ * gst_quiclib_error_as_string:
+ * 
+ * @err: A GstQuicLibError code
+ * @return (transfer none): A string representing the passed-in error code. Do
+ *    not free this memory.
+ */
 const gchar *
 gst_quiclib_error_as_string (GstQuicLibError err)
 {
@@ -161,6 +186,9 @@ struct _SocketControlMessageECN {
   } ecn;
 };
 
+/**
+ * GSocketControlMessage inherited type to expose ECN codepoints to applications 
+ */
 G_DEFINE_TYPE (SocketControlMessageECN, socket_control_message_ecn,
     G_TYPE_SOCKET_CONTROL_MESSAGE);
 
@@ -250,6 +278,10 @@ socket_control_message_ecn_deserialise (int level, int type, gsize size,
   return NULL;
 }
 
+/**
+ * GSocketControlMessage inherited type to expose pktinfo messages to
+ * applications.
+ */
 #define SOCKET_CONTROL_MESSAGE_PKTINFO_TYPE \
   socket_control_message_pktinfo_get_type ()
 G_DECLARE_FINAL_TYPE (SocketControlMessagePKTINFO,
@@ -420,6 +452,10 @@ socket_control_message_pktinfo_deserialise (int level, int type, gsize size,
   return msg;
 }
 
+/**
+ * GSocketControlMessage inherited type to expose SCM_TIMESTAMP and
+ *    SCM_TIMESTAMPNS packet data to applications.
+ */
 #define SOCKET_CONTROL_MESSAGE_TIMESTAMP_TYPE socket_control_message_timestamp_get_type ()
 G_DECLARE_FINAL_TYPE (SocketControlMessageTimestamp,
     socket_control_message_timestamp, SOCKET_CONTROL_MESSAGE, TIMESTAMP,
@@ -526,7 +562,42 @@ socket_control_message_timestamp_deserialise (int level, int type, gsize size,
   return NULL;
 }
 
+/*
+ * How datatypes work in this library:
+ * 
+ * There is a GstQuicLibTransportContext base class which contains the common
+ * components between client and server data.
+ * 
+ * Servers have a GstQuicLibServerContext, which is an inherited type of
+ * GstQuicLibTransportContext.
+ * 
+ * A client makes a connection using a GstQuicLibTransportConnection object,
+ * which is another inherited type of GstQuicLibTransportContext.
+ * 
+ * When receiving an INITIAL from a client, the server creates another
+ * GstQuicLibTransportConnection object that becomes a child of the
+ * GstQuicLibServerContext.
+ */
 
+/**
+ * GstQuicLibTransportParameters
+ * @max_data: The maximum connection data the remote endpoint will be permitted
+ *    to send.
+ * @max_stream_data_bidi: The maximum amount of data the remote endpoint will be
+ *    permitted to send on each bidirectional stream until receiving a
+ *    MAX_STREAM_DATA frame.
+ * @max_stream_data_uni: The maximum amount of data the remote endpoint will be
+ *    permitted to send on each unidirectional stream until receiving a
+ *    MAX_STREAM_DATA frame.
+ * @max_streams_bidi: The maximum number of bidirectional streams the remote
+ *    endpoint will be permitted to open until receiving a MAX_STREAMS frame.
+ * @max_streams_uni: The maximum number of unidirectional streams the remote
+ *    endpoint will be permitted to open until receiving a MAX_STREAMS frame.
+ * @num_cids: The number of connection IDs to negotiate with the remote
+ *    endpoint.
+ * @enable_datagrams: If TRUE, set the max_datagram_frame_size transport
+ *    parameter to enable the reception of datagrams by this endpoint.
+ */
 /*
  * TODO: Just use the ngtcp2_transport_params struct instead?
  */
@@ -540,6 +611,25 @@ typedef struct _GstQuicLibTransportParameters {
   gboolean enable_datagrams;
 } GstQuicLibTransportParameters;
 
+/**
+ * GstQuicLibTransportContextPrivate
+ * @user: The GstQuicLibTransportUser class instance to send callbacks to.
+ * @app_ctx: Opaque application context to supply with callbacks.
+ * @loop: The GMainLoop that runs the QUIC library state machine and reads data.
+ * @loop_context: GMainContext for the @loop.
+ * @loop_thread: The thread that runs @loop.
+ * @async_notif_loop: A GMainLoop that runs asynchronous callbacks.
+ * @async_notif_loop_context: GMainContext for the @async_notif_loop.
+ * @async_notif_loop_thread: A thread that runs @async_notif_loop.
+ * @timeout: Timeout source.
+ * @state: Connection state.
+ * @location: For a server, the listening string. For a client or connection,
+ *    the URI of the remote endpoint.
+ * @tp_sent: The sent transport parameters for a connection, or the defaults for
+ *    any new server connections.
+ * @rmutex: Mutex for locking this connection.
+ * @enable_stats: Flag to enable storage of statistics.
+ */
 struct _GstQuicLibTransportContextPrivate {
   GstQuicLibTransportUser *user; /* TODO: Rename to owner? */
   gpointer app_ctx;
@@ -1308,6 +1398,10 @@ gst_quiclib_server_context_finalise (GstQuicLibServerContext *self)
 		if (GST_QUICLIB_TRANSPORT_CONTEXT (o)->type != QUIC_CTX_SERVER) \
 		abort (0);
 
+/*
+ * Asynchronous callback handling source types
+ */
+
 typedef struct {
   GSource parent;
 
@@ -2039,6 +2133,9 @@ quiclib_rawcidtostr (const uint8_t *cid, const size_t cidlen, gchar *buf)
   return buf;
 }
 
+/*
+ * Used for debugging only
+ */
 gchar *
 quiclib_cidtostr (ngtcp2_cid *cid, gchar *buf)
 {
@@ -3086,6 +3183,11 @@ _quiclib_add_stat (GstQuicLibTransportConnection *conn, GList **list,
   g_mutex_unlock (&conn->stats.mutex);
 }
 
+/*
+ * quiclib_packet_write
+ *
+ * Sends packets to the network that have been created by ngtcp2.
+ */
 gssize
 quiclib_packet_write (GstQuicLibTransportConnection *conn, const gchar *data,
     gsize nwrite, ngtcp2_path_storage *ps)
@@ -3144,10 +3246,30 @@ quiclib_packet_write (GstQuicLibTransportConnection *conn, const gchar *data,
   return written;
 }
 
+/**
+ * quiclib_ngtcp2_conn_write
+ * 
+ * INTERNAL FUNCTION ONLY.
+ * Make ngtcp2 create packets to be sent with @quiclib_packet_write.
+ * 
+ * This code can be re-entrant if it is possible to send more than one packet.
+ * 
+ * @conn: The QUIC connection to write packets for
+ * @stream_id: The stream ID to write. This can be -1 during handshake and
+ *    crypto exchanges, and implies that some connection-level stuff needs to be
+ *    exchanged, not in streams. This will all be managed internally by ngtcp2,
+ *    and there should be a zero-length vector of buffers in this case.
+ * @frame: A vector of buffers for the stream to be sent.
+ * @nvec: The number of buffers in @frame.
+ * @final: Whether the stream should be closed on the completion of sending the
+ *    buffers in @frame.
+ * 
+ * @return The size of QUIC stream data written from @frame, or <0 on error.
+ */
 ssize_t
 quiclib_ngtcp2_conn_write (GstQuicLibTransportConnection *conn,
     gint64 stream_id, ngtcp2_vec *frame, size_t nvec,
-    int final, GstBuffer *orig_ref)
+    int final)
 {
   ngtcp2_path_storage ps, prev_ps;
   uint32_t flags = 0; /* NGTCP2_WRITE_STREAM_FLAG_MORE */
@@ -3254,8 +3376,7 @@ quiclib_ngtcp2_conn_write (GstQuicLibTransportConnection *conn,
 
         gst_buffer_unmap (buffer, &map);
 
-        return quiclib_ngtcp2_conn_write (conn, stream_id, frame, nvec, final,
-            orig_ref);
+        return quiclib_ngtcp2_conn_write (conn, stream_id, frame, nvec, final);
     }
   }
 
@@ -3333,6 +3454,20 @@ quiclib_ngtcp2_conn_write (GstQuicLibTransportConnection *conn,
   return pdatalen;
 }
 
+/**
+ * quiclib_ngtcp2_datagram_write
+ * 
+ * INTERNAL FUNCTION ONLY.
+ * Like @quiclib_ngtcp2_conn_write, but for writing DATAGRAM frames ONLY.
+ * 
+ * @conn: The connection to write the DATAGRAM frames out to.
+ * @frame: A vector of buffers to package into DATAGRAM frames. These will be
+ *    payloaded into individual DATAGRAM frames.
+ * @nvec: The number of buffers in @frame.
+ * 
+ * @return The size of QUIC DATAGRAM frame body data written from @frame, or <0
+ *    on error.
+ */
 ssize_t
 quiclib_ngtcp2_datagram_write (GstQuicLibTransportConnection *conn,
     ngtcp2_vec *frame, size_t nvec)
@@ -3447,6 +3582,7 @@ quiclib_ngtcp2_datagram_write (GstQuicLibTransportConnection *conn,
   return nwrite;
 }
 
+/* For debugging only */
 #define quiclib_print_ngtcp2_transport_params(ctx, params) \
 do { \
   GST_DEBUG_OBJECT (ctx, \
@@ -3477,6 +3613,14 @@ do { \
 
 #define MAX_UDP 65507
 
+/**
+ * gst_quiclib_new_conn_from_server
+ * 
+ * Create a new connection object from a running server instance. This is used
+ * when a client makes a connection to the server.
+ * 
+ * INTERNAL FUNCTION ONLY.
+ */
 GstQuicLibTransportConnection *
 gst_quiclib_new_conn_from_server (GstQuicLibServerContext *server)
 {
@@ -3543,6 +3687,14 @@ gst_quiclib_new_conn_from_server (GstQuicLibServerContext *server)
   return conn;
 }
 
+/**
+ * quiclib_data_received
+ * 
+ * Called by the GLib socket handling code when there is a packet to read on the
+ * UDP socket.
+ * 
+ * INTERNAL FUNCTION ONLY.
+ */
 gboolean
 quiclib_data_received (GSocket *socket, GIOCondition condition,
     gpointer user_data) {
@@ -3901,7 +4053,7 @@ quiclib_data_received (GSocket *socket, GIOCondition condition,
      * TODO: Make this a timeout operation to pack ACKs into regular packets
      * and minimise small packet overheads
      */
-    rv = quiclib_ngtcp2_conn_write (conn, -1, NULL, 0, 0, NULL);
+    rv = quiclib_ngtcp2_conn_write (conn, -1, NULL, 0, 0);
     if (rv != 0) {
       continue;
     }
@@ -3919,6 +4071,13 @@ quiclib_data_received (GSocket *socket, GIOCondition condition,
   return bytes_read == 0?TRUE:FALSE;
 }
 
+/**
+ * quiclib_open_socket
+ * 
+ * Common code for opening listening sockets for QUIC connections.
+ * 
+ * INTERNAL FUNCTION ONLY.
+ */
 QuicLibSocketContext *
 quiclib_open_socket (GstQuicLibTransportContext *ctx, GSocketAddress *addr)
 {
@@ -4105,7 +4264,23 @@ quiclib_open_server_socket_foreach (gpointer data, gpointer user_data)
   ctx->sockets = g_slist_prepend (ctx->sockets, socket);
 }
 
-
+/**
+ * gst_quiclib_transport_server_new
+ * 
+ * Create a new QuicLib server instance with default settings. This function
+ * creates a new GstQuicLibServerContext object, but DOES NOT start the source
+ * listener for packets, allowing you to configure the server object further
+ * as necessary using it's attributes.
+ * 
+ * @user: The callback target.
+ * @pkey_location: Path to the PEM/PK12 private key for the server to use.
+ * @cert_location: Path to the PEM certificate for the server to present to
+ *    clients.
+ * @sni: The server name information (SNI) value to present as part of the TLS
+ *    handshake.
+ * @app_ctx: Opaque application context passed back in callbacks. 
+ * @return GstQuicLibServerContext* 
+ */
 GstQuicLibServerContext *
 gst_quiclib_transport_server_new (GstQuicLibTransportUser *user,
     const gchar *pkey_location, const gchar *cert_location, const gchar *sni,
@@ -4197,6 +4372,16 @@ error:
   return NULL;
 }
 
+/**
+ * gst_quiclib_transport_server_listen
+ * 
+ * Start a QUIC transport server.
+ * 
+ * Attempting to start a QUIC transport server that's already started may lead
+ * to undefined behaviour!
+ * 
+ * @server: The server to start listening.
+ */
 gboolean
 gst_quiclib_transport_server_listen (GstQuicLibServerContext *server)
 {
@@ -4244,6 +4429,18 @@ error:
   return rv;
 }
 
+/**
+ * gst_quiclib_transport_client_new
+ * 
+ * Create a new QuicLib client instance with default settings. This function
+ * creates a new GstQuicLibTransportConnection object, but DOES NOT start the
+ * source listener for packets nor send the INITIAL message, allowing you to
+ * configure the server object further as necessary using it's attributes.
+ * 
+ * @user: The callback target.
+ * @app_ctx: Opaque application context passed back in callbacks.
+ * @return GstQuicLibServerContext* 
+ */
 GstQuicLibTransportConnection *
 gst_quiclib_transport_client_new (GstQuicLibTransportUser *user,
     gpointer app_ctx)
@@ -4290,6 +4487,15 @@ free_conn:
   return NULL;
 }
 
+/**
+ * gst_quiclib_transport_client_connect
+ * 
+ * Start the client connection and send the INITIAL packet.
+ * 
+ * @conn: The connection to start
+ * @return TRUE if connection was started and INITIAL packet sent. Wait for
+ *    handshake_complete callback before attempting to use the connection!
+ */
 gboolean
 gst_quiclib_transport_client_connect (GstQuicLibTransportConnection *conn)
 {
@@ -4474,7 +4680,7 @@ gst_quiclib_transport_client_connect (GstQuicLibTransportConnection *conn)
 
   quiclib_enable_tls_export (GST_QUICLIB_TRANSPORT_CONTEXT (conn), conn->ssl);
 
-  rv = quiclib_ngtcp2_conn_write (conn, -1, NULL, 0, 0, NULL);
+  rv = quiclib_ngtcp2_conn_write (conn, -1, NULL, 0, 0);
   if (rv != 0) {
     GST_ERROR_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn), "conn_write failed");
     ngtcp2_conn_del (conn->quic_conn);
@@ -4614,6 +4820,13 @@ quiclib_close_wait (gpointer user_data)
   return rv;
 }
 
+/**
+ * quiclib_transport_process_packet
+ * 
+ * Feed a received packet into NGTCP2 for processing.
+ *
+ * INTERNAL FUNCTION ONLY.
+ */
 gint
 quiclib_transport_process_packet (GstQuicLibTransportConnection *conn,
     const ngtcp2_pkt_info *pktinfo, uint8_t *pkt, size_t pktlen)
@@ -4685,6 +4898,16 @@ quiclib_transport_process_packet (GstQuicLibTransportConnection *conn,
   return 0;
 }
 
+/**
+ * gst_quiclib_transport_disconnect
+ * 
+ * Closes a QUIC connection.
+ * 
+ * @conn: Connection to close.
+ * @app_error: Whether this is closing due to an application error.
+ * @reason: The transport or application error code that caused this closure.
+ * @return 0 on success, <0 on error.
+ */
 gint
 gst_quiclib_transport_disconnect (GstQuicLibTransportConnection *conn,
     gboolean app_error, guint reason)
@@ -4789,6 +5012,20 @@ quiclib_buffer_unmap (GList **map)
   *map = maps;
 }
 
+/**
+ * gst_quiclib_transport_open_stream
+ * 
+ * Open a new stream on an open connection. The handshake MUST be completed
+ * before this method is called.
+ * 
+ * @conn: Connection
+ * @bidirectional: Open new bidirectional stream when TRUE, unidirectional when
+ *    FALSE.
+ * @stream_ctx: Opaque application context to return in callbacks about this
+ *    stream.
+ * @return The QUIC stream ID of the new stream, or a GstQuicLibErr value on
+ *    error.
+ */
 gint64
 gst_quiclib_transport_open_stream (GstQuicLibTransportConnection *conn,
     gboolean bidirectional, gpointer stream_ctx)
@@ -4905,6 +5142,10 @@ GST_DEFINE_MINI_OBJECT_TYPE (GstQuicLibStreamClose, gst_quiclib_stream_close);
 
 #define gst_quiclib_stream_close_unref(obj) \
     gst_mini_object_unref (GST_MINI_OBJECT_CAST (obj));
+
+/*
+ * Asynchronous callback handling starts
+ */
 
 static gboolean
 _quiclib_transport_send_queue_source_prepare (GSource *source, gint *timeout)
@@ -5023,7 +5264,7 @@ _quiclib_transport_send_queue_source_dispatch (GSource *source, GSourceFunc cb,
         }
         gst_quiclib_transport_context_unlock (send_queue_src->conn);
       } else if (quiclib_ngtcp2_conn_write (send_queue_src->conn,
-            close_obj->stream_id, NULL, 0, 1, NULL) != 0) {
+            close_obj->stream_id, NULL, 0, 1) != 0) {
         GST_ERROR_OBJECT (obj, "Couldn't write end-of-stream for stream %lu",
             close_obj->stream_id);
       }
@@ -5088,6 +5329,10 @@ _ensure_quiclib_send_queue (GstQuicLibTransportConnection *conn)
   }
 }
 
+/*
+ * End asynchronous callback hanlding.
+ */
+
 gboolean
 gst_quiclib_transport_close_stream (GstQuicLibTransportConnection *conn,
     guint64 stream_id, guint64 error_code)
@@ -5100,12 +5345,26 @@ gst_quiclib_transport_close_stream (GstQuicLibTransportConnection *conn,
         error_code);
     gst_quiclib_transport_context_unlock (conn);
   } else {
-    rv = (int) quiclib_ngtcp2_conn_write (conn, stream_id, NULL, 0, 1, NULL);
+    rv = (int) quiclib_ngtcp2_conn_write (conn, stream_id, NULL, 0, 1);
   }
 
   return (rv == 0)?(TRUE):(FALSE);
 }
 
+/**
+ * gst_quiclib_transport_send_buffer
+ * 
+ * Convenience function that wraps _send_stream and _send_datagram depending on
+ * if the passed in buffer has a GstQuicLibStreamMeta or GstQuicLibDatagramMeta
+ * respectively.
+ * 
+ * @conn: The connection to send the buffer on.
+ * @buf: The buffer to send.
+ * @bytes_written: If non-NULL, returns the number of bytes from @buf that was
+ *    written to the remote peer.
+ * @return GST_QUICLIB_ERR if buffer did not contain a suitable meta, or any 
+ *    other GstQuicLibError on sending failure.
+ */
 GstQuicLibError
 gst_quiclib_transport_send_buffer (GstQuicLibTransportConnection *conn,
     GstBuffer *buf, ssize_t *bytes_written)
@@ -5152,6 +5411,19 @@ _quiclib_transport_store_ack_bufs (GstQuicLibTransportConnection *conn,
   return stream->ack_bufs != NULL;
 }
 
+/**
+ * gst_quiclib_transport_send_stream
+ * 
+ * Send a buffer on a nominated stream ID. If stream ID is -1 and @buf contains
+ * a buffer with a GstQuicLibStreamMeta, the stream ID carried in the meta will
+ * be used instead.
+ * 
+ * @conn: Connection to send buffer on.
+ * @buf: Buffer to send
+ * @stream_id: Stream to send the buffer on.
+ * @bytes_written: If non-NULL, returns the number of bytes written from @buf
+ * @return GstQuicLibError 
+ */
 GstQuicLibError
 gst_quiclib_transport_send_stream (GstQuicLibTransportConnection *conn,
     GstBuffer *buf, gint64 stream_id, ssize_t *bytes_written)
@@ -5210,7 +5482,7 @@ gst_quiclib_transport_send_stream (GstQuicLibTransportConnection *conn,
 
   do {
     ssize_t _b_written = quiclib_ngtcp2_conn_write (conn, stream_id, vec, n,
-      meta->final, buf);
+      meta->final);
 
     if (_b_written < 0) {
       GST_ERROR_OBJECT (GST_QUICLIB_TRANSPORT_CONTEXT (conn),

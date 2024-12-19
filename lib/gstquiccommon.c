@@ -42,6 +42,22 @@
  * Boston, MA 02111-1307, USA.
  */
 
+/*
+ * This functions in this file is the one that should be primarily used by
+ * GStreamer elements. The GstQuicLibCommon class allows multiple GStreamer
+ * elements access to the same GstQuicLibTransportContext, for example to allow
+ * the quicsrc and quicsink elements to share the same connection to both
+ * receive and send messages on the same QUIC connection.
+ * 
+ * GStreamer elements should use gst_quiclib_get_server instead of
+ * gst_quiclib_transport_server_new, and gst_quiclib_get_client instead of
+ * gst_quiclib_transport_client_new.
+ * 
+ * This file also includes common query functions to allow GStreamer elements to
+ * query aspects of a QUIC connection without having to pass handles to the
+ * underlying QUIC instance around.
+ */
+
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif

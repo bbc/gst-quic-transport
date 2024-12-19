@@ -131,3 +131,10 @@ meson install -C build
 
 The above commands will create a `build` directory in your source tree, which
 is where the compiled objects will be stored before install.
+
+# Debugging
+
+If you want to debug what's going on inside QUIC packets, you can get the TLS
+keys by specifying the `GST_QUICLIB_TLS_EXPORT_DIR` environment variable with
+the path to an extant directory (it will not be created for you). These keys
+can then be provided to your packet tracing tool of choice, i.e. Wireshark.

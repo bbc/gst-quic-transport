@@ -42,6 +42,11 @@
  * Boston, MA 02111-1307, USA.
  */
 
+/**
+ * This file includes the declaration of the GstQuicLibStreamMeta type, as well
+ * as a series of query helper functions for use by GStreamer elements.
+ */
+
 #include "gstquicstream.h"
 #include "gstquictransport.h"
 #include "gstquiccommon.h"

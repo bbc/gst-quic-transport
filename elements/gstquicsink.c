@@ -269,6 +269,10 @@ gst_quicsink_class_init (GstQuicSinkClass * klass)
   gstbasesink_class->render = gst_quicsink_render;
   gstbasesink_class->query = gst_quicsink_query;
 
+  /*
+   * See the full list of common endpoint properties for QUIC transport
+   * handling in gstquiccommon.h
+   */
   gst_quiclib_common_install_endpoint_properties (gobject_class);
 
   g_object_class_install_property (gobject_class, PROP_QUIC_CONNECTION_CTX,
@@ -320,6 +324,10 @@ gst_quicsink_set_property (GObject * object, guint prop_id,
   GstQuicSink *sink = GST_QUICSINK (object);
 
   switch (prop_id) {
+    /*
+     * See the full list of common endpoint properties for QUIC transport
+     * handling in gstquiccommon.h
+     */
     case PROP_QUIC_ENDPOINT_COMMON_ENUM_CASES:
     case PROP_QUIC_ENDPOINT_CLIENT_ENUM_CASES:
       if (prop_id == PROP_ALPN) {
@@ -354,6 +362,10 @@ gst_quicsink_get_property (GObject * object, guint prop_id,
   GstQuicSink *sink = GST_QUICSINK (object);
 
   switch (prop_id) {
+    /*
+     * See the full list of common endpoint properties for QUIC transport
+     * handling in gstquiccommon.h
+     */
     case PROP_QUIC_ENDPOINT_COMMON_ENUM_CASES:
     case PROP_QUIC_ENDPOINT_CLIENT_ENUM_CASES:
       gst_quiclib_common_get_endpoint_property_checked (sink, sink->conn, pspec,

@@ -113,6 +113,11 @@ typedef enum _GstQUICMode {
 G_DECLARE_INTERFACE (GstQuicLibCommonUser, gst_quiclib_common_user, \
     GST_QUICLIB, COMMON_USER, GstObject);
 
+/**
+ * GstQuicLibCommonUserInterface
+ * 
+ * Effectively a copy of GstQuicLibTransportUser. 
+ */
 struct _GstQuicLibCommonUserInterface {
   GTypeInterface parent;
 
@@ -290,6 +295,12 @@ typedef GList GstQuicLibAddressList;
 GType gst_quiclib_address_list_get_type (void);
 GstQuicLibAddressList * gst_quiclib_address_list_copy (GstQuicLibAddressList *l);
 void gst_quiclib_address_list_free (GstQuicLibAddressList *l);
+
+/*
+ * This defines the common properties used across all elements which perform
+ * QUIC transport handling, to make sure things aren't missed when there are
+ * bin elements which wrap other elements.
+ */
 
 #define PROP_QUIC_ENDPOINT_COMMON_ENUMS \
   PROP_LOCATION, \
